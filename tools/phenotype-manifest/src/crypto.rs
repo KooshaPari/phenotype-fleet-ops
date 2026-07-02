@@ -2,7 +2,7 @@
 use crate::manifest::{Manifest, VerificationResult};
 use anyhow::{anyhow, Context, Result};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
-use ed25519_dalek::{Signer, SigningKey, Signature, Verifier, VerifyingKey};
+use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use rand::rngs::OsRng;
 use rand::RngCore;
 use std::fs;
@@ -118,14 +118,23 @@ pub fn verify_manifest(
     }
     let now = chrono::Utc::now();
     if now > manifest.expires_at {
-        errors.push(format!("Manifest expired at {} (now {})", manifest.expires_at, now));
+        errors.push(format!(
+            "Manifest expired at {} (now {})",
+            manifest.expires_at, now
+        ));
     }
     let age_hours = (now - manifest.generated_at).num_hours();
     if age_hours > max_age_hours as i64 {
-        warnings.push(format!("Manifest age {}h exceeds max {}h", age_hours, max_age_hours));
+        warnings.push(format!(
+            "Manifest age {}h exceeds max {}h",
+            age_hours, max_age_hours
+        ));
     }
     if manifest.health_score < min_health_score {
-        errors.push(format!("Health score {:.2} below minimum {:.2}", manifest.health_score, min_health_score));
+        errors.push(format!(
+            "Health score {:.2} below minimum {:.2}",
+            manifest.health_score, min_health_score
+        ));
     }
     if require_all_pillars {
         let pillars = [
@@ -137,7 +146,10 @@ pub fn verify_manifest(
         ];
         for (name, pillar) in pillars {
             if pillar.checks.is_empty() && pillar.skip_reason.is_none() {
-                errors.push(format!("Pillar '{}' has no checks and no skip reason", name));
+                errors.push(format!(
+                    "Pillar '{}' has no checks and no skip reason",
+                    name
+                ));
             }
         }
     }

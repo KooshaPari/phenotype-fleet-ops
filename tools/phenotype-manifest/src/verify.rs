@@ -25,16 +25,16 @@ pub fn verify_manifest_cmd(args: VerifyArgs, cfg: &AppConfig) -> Result<()> {
     // 1. Read manifest
     let content = fs::read_to_string(&manifest_path)
         .with_context(|| format!("Failed to read manifest: {}", manifest_path.display()))?;
-    let json: serde_json::Value = serde_json::from_str(&content)
-        .context("Failed to parse manifest JSON")?;
+    let json: serde_json::Value =
+        serde_json::from_str(&content).context("Failed to parse manifest JSON")?;
 
     // 2. Schema validation (optional, uses configured URL)
     if let Err(errs) = schema_validate_manifest(&json, &cfg.schema_url) {
         eprintln!("Schema validation warnings: {}", errs.join("; "));
     }
 
-    let manifest: Manifest = serde_json::from_value(json)
-        .context("Failed to deserialize manifest")?;
+    let manifest: Manifest =
+        serde_json::from_value(json).context("Failed to deserialize manifest")?;
 
     // 3. Load public key
     let pubkey = load_verifying_key(&pubkey_path)

@@ -84,5 +84,5 @@ pub struct ShowArgs {
 pub enum OutputFormat {
     Human,
     Json,
-    Github,  // GitHub Actions annotations
+    Github, // GitHub Actions annotations
 }

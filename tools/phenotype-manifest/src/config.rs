@@ -11,7 +11,7 @@
 use figment::providers::{Env, Format, Serialized, Toml};
 use figment::Figment;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 // ── Default helpers ────────────────────────────────────────────────────────
 
@@ -157,13 +157,13 @@ impl AppConfig {
     }
 
     /// Expand `~` in a path to `$HOME`.
-    pub fn expand_home(path: &PathBuf) -> PathBuf {
+    pub fn expand_home(path: &Path) -> PathBuf {
         let s = path.to_string_lossy().to_string();
         if let Some(stripped) = s.strip_prefix("~/") {
             let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
             PathBuf::from(format!("{}/{}", home, stripped))
         } else {
-            path.clone()
+            path.to_path_buf()
         }
     }
 }

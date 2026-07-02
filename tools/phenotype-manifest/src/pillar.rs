@@ -113,10 +113,14 @@ impl Pillar {
 
     /// Should this pillar be skipped based on changed files?
     pub fn should_skip(&self, changed_files: &[String]) -> Option<String> {
-        let patterns = self.checks().into_iter().flat_map(|c| c.globs).collect::<Vec<_>>();
-        let has_relevant = changed_files.iter().any(|f| {
-            patterns.iter().any(|p| glob_match(p, f))
-        });
+        let patterns = self
+            .checks()
+            .into_iter()
+            .flat_map(|c| c.globs)
+            .collect::<Vec<_>>();
+        let has_relevant = changed_files
+            .iter()
+            .any(|f| patterns.iter().any(|p| glob_match(p, f)));
         if !has_relevant {
             Some(format!("No relevant file changes for {}", self))
         } else {
@@ -155,7 +159,11 @@ impl Pillar {
                     name: check.name.clone(),
                     passed,
                     duration_ms: duration,
-                    output: if output.is_empty() { None } else { Some(output) },
+                    output: if output.is_empty() {
+                        None
+                    } else {
+                        Some(output)
+                    },
                     error: if error.is_empty() { None } else { Some(error) },
                     skipped: Some(false),
                     skip_reason: None,

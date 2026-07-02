@@ -110,12 +110,19 @@ impl Manifest {
     /// Human-readable formatting
     pub fn format_human(&self) -> String {
         let mut out = String::new();
-        out.push_str(&format!("📋 Manifest v{} @ {}\n", self.schema_version, self.generated_at.format("%Y-%m-%d %H:%M:%S UTC")));
+        out.push_str(&format!(
+            "📋 Manifest v{} @ {}\n",
+            self.schema_version,
+            self.generated_at.format("%Y-%m-%d %H:%M:%S UTC")
+        ));
         out.push_str(&format!("   Commit: {}\n", &self.commit_sha[..12]));
         out.push_str(&format!("   Tree:   {}\n", &self.tree_sha[..12]));
-        out.push_str(&format!("   Expires: {}\n", self.expires_at.format("%Y-%m-%d %H:%M:%S UTC")));
+        out.push_str(&format!(
+            "   Expires: {}\n",
+            self.expires_at.format("%Y-%m-%d %H:%M:%S UTC")
+        ));
         out.push_str(&format!("   Health: {:.1}%\n", self.health_score * 100.0));
-        out.push_str("\n");
+        out.push('\n');
 
         let pillars = [
             ("Quality", &self.pillars.quality),
@@ -127,11 +134,31 @@ impl Manifest {
 
         for (name, pillar) in pillars {
             let status = if pillar.passed { "✅" } else { "❌" };
-            let skip = pillar.skip_reason.as_ref().map(|s| format!(" (skipped: {})", s)).unwrap_or_default();
-            out.push_str(&format!("   {} {}: {} checks, {}ms{}\n", status, name, pillar.checks.len(), pillar.duration_ms, skip));
+            let skip = pillar
+                .skip_reason
+                .as_ref()
+                .map(|s| format!(" (skipped: {})", s))
+                .unwrap_or_default();
+            out.push_str(&format!(
+                "   {} {}: {} checks, {}ms{}\n",
+                status,
+                name,
+                pillar.checks.len(),
+                pillar.duration_ms,
+                skip
+            ));
             for (check_name, check) in &pillar.checks {
-                let check_status = if check.passed { "  ✓" } else if check.skipped.unwrap_or(false) { "  ⊘" } else { "  ✗" };
-                out.push_str(&format!("     {} {} ({}ms)\n", check_status, check_name, check.duration_ms));
+                let check_status = if check.passed {
+                    "  ✓"
+                } else if check.skipped.unwrap_or(false) {
+                    "  ⊘"
+                } else {
+                    "  ✗"
+                };
+                out.push_str(&format!(
+                    "     {} {} ({}ms)\n",
+                    check_status, check_name, check.duration_ms
+                ));
             }
         }
 
@@ -171,7 +198,12 @@ impl PillarResult {
         }
         for (check_name, check) in &self.checks {
             if check.name != *check_name {
-                anyhow::bail!("Check name mismatch in pillar '{}': key='{}' vs name='{}'", name, check_name, check.name);
+                anyhow::bail!(
+                    "Check name mismatch in pillar '{}': key='{}' vs name='{}'",
+                    name,
+                    check_name,
+                    check.name
+                );
             }
         }
         Ok(())
@@ -201,7 +233,10 @@ impl VerificationResult {
             manifest.pillars.perf.passed,
             manifest.pillars.compliance.passed,
             manifest.pillars.docs.passed,
-        ].iter().filter(|&&p| p).count();
+        ]
+        .iter()
+        .filter(|&&p| p)
+        .count();
 
         let checks_total: usize = [
             &manifest.pillars.quality.checks,
@@ -209,7 +244,10 @@ impl VerificationResult {
             &manifest.pillars.perf.checks,
             &manifest.pillars.compliance.checks,
             &manifest.pillars.docs.checks,
-        ].iter().map(|c| c.len()).sum();
+        ]
+        .iter()
+        .map(|c| c.len())
+        .sum();
 
         let checks_passed: usize = [
             &manifest.pillars.quality.checks,
@@ -217,7 +255,11 @@ impl VerificationResult {
             &manifest.pillars.perf.checks,
             &manifest.pillars.compliance.checks,
             &manifest.pillars.docs.checks,
-        ].iter().flat_map(|c| c.values()).filter(|c| c.passed).count();
+        ]
+        .iter()
+        .flat_map(|c| c.values())
+        .filter(|c| c.passed)
+        .count();
 
         Self {
             valid: true,

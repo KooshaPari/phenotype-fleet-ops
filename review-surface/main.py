@@ -11,6 +11,7 @@ import random
 import json
 import hashlib
 import hmac
+import asyncio
 import logging
 from typing import Optional
 from datetime import datetime, timezone
@@ -85,8 +86,28 @@ class PRState(BaseModel):
 # In-memory storage (Redis in production)
 _pr_store: dict[str, PRState] = {}
 _rate_limiter: dict[str, list[datetime]] = {}
+_state_lock: asyncio.Lock = asyncio.Lock()
 
 AVAILABLE_BACKENDS: list[str] = list(settings.tool_backends)
+
+# Shared HTTP client (reused across requests instead of per-call instances)
+_shared_client: Optional[httpx.AsyncClient] = None
+
+
+def get_shared_client() -> httpx.AsyncClient:
+    """Return the shared HTTP client, creating it on first access."""
+    global _shared_client
+    if _shared_client is None:
+        _shared_client = httpx.AsyncClient(timeout=30.0)
+    return _shared_client
+
+
+async def close_shared_client() -> None:
+    """Gracefully close the shared HTTP client."""
+    global _shared_client
+    if _shared_client is not None:
+        await _shared_client.aclose()
+        _shared_client = None
 
 
 # ── GitHub Webhook Handler ──────────────────────────────────────────────────────
@@ -111,33 +132,44 @@ def _get_pr_key(owner: str, repo: str, number: int) -> str:
     return f"{owner}/{repo}#{number}"
 
 
-def _pick_backend(pr_key: str) -> str:
-    """Pick ONE backend for this PR, stick with it."""
-    existing = _pr_store.get(pr_key)
-    if existing:
-        return existing.backend
+async def _pick_backend(pr_key: str) -> str:
+    """Pick ONE backend for this PR, stick with it.
 
-    # Random pick weighted by availability
-    backend = random.choice(AVAILABLE_BACKENDS)
-    _pr_store[pr_key] = PRState(
-        pr_id=pr_key,
-        backend=backend,
-        assigned_at=datetime.now(timezone.utc).isoformat(),
-    )
-    logger.info("assigned_backend", pr=pr_key, backend=backend)
-    return backend
+    Protected by _state_lock to prevent races when concurrent
+    webhook events arrive for new PRs.
+    """
+    async with _state_lock:
+        existing = _pr_store.get(pr_key)
+        if existing:
+            return existing.backend
+
+        # Random pick weighted by availability
+        backend = random.choice(AVAILABLE_BACKENDS)
+        _pr_store[pr_key] = PRState(
+            pr_id=pr_key,
+            backend=backend,
+            assigned_at=datetime.now(timezone.utc).isoformat(),
+        )
+        logger.info("assigned_backend", pr=pr_key, backend=backend)
+        return backend
 
 
-def _check_rate_limit(backend: str) -> bool:
-    now = datetime.now(timezone.utc)
-    hour_ago = now.timestamp() - 3600
-    if backend not in _rate_limiter:
-        _rate_limiter[backend] = []
-    _rate_limiter[backend] = [t for t in _rate_limiter[backend] if t.timestamp() > hour_ago]
-    if len(_rate_limiter[backend]) >= settings.rate_limit_per_hour:
-        return False
-    _rate_limiter[backend].append(now)
-    return True
+async def _check_rate_limit(backend: str) -> bool:
+    """Check and record a rate-limit slot for the given backend.
+
+    Protected by _state_lock to prevent races when concurrent
+    requests hit the same backend bucket.
+    """
+    async with _state_lock:
+        now = datetime.now(timezone.utc)
+        hour_ago = now.timestamp() - 3600
+        if backend not in _rate_limiter:
+            _rate_limiter[backend] = []
+        _rate_limiter[backend] = [t for t in _rate_limiter[backend] if t.timestamp() > hour_ago]
+        if len(_rate_limiter[backend]) >= settings.rate_limit_per_hour:
+            return False
+        _rate_limiter[backend].append(now)
+        return True
 
 
 async def _perform_review(
@@ -161,10 +193,11 @@ async def _perform_review(
     else:
         result = {"error": f"Unknown backend: {backend}"}
 
-    # Update state
-    if pr_key in _pr_store:
-        _pr_store[pr_key].review_count += 1
-        _pr_store[pr_key].last_review_at = datetime.now(timezone.utc).isoformat()
+    # Update state (protected by lock for concurrent safety)
+    async with _state_lock:
+        if pr_key in _pr_store:
+            _pr_store[pr_key].review_count += 1
+            _pr_store[pr_key].last_review_at = datetime.now(timezone.utc).isoformat()
 
     return result
 
@@ -182,53 +215,50 @@ async def _dispatch_forge_review(owner: str, repo: str, pr_number: int) -> dict:
 
 
 async def _dispatch_coderabbit_review(owner: str, repo: str, pr_number: int) -> dict:
-    """Send review to CodeRabbit via API."""
-    async with httpx.AsyncClient() as client:
-        try:
-            resp = await client.post(
-                f"https://api.coderabbit.ai/v1/reviews",
-                json={"owner": owner, "repo": repo, "pr_number": pr_number},
-                headers={"Authorization": f"Bearer {os.getenv('CODERABBIT_TOKEN', '')}"},
-                timeout=30,
-            )
-            return {"status": "dispatched", "backend": "coderabbit", "response_status": resp.status_code}
-        except Exception as e:
-            logger.error("coderabbit_dispatch_failed", error=str(e))
-            return {"status": "error", "backend": "coderabbit", "error": str(e)}
+    """Send review to CodeRabbit via API (reuses shared HTTP client)."""
+    client = get_shared_client()
+    try:
+        resp = await client.post(
+            f"https://api.coderabbit.ai/v1/reviews",
+            json={"owner": owner, "repo": repo, "pr_number": pr_number},
+            headers={"Authorization": f"Bearer {os.getenv('CODERABBIT_TOKEN', '')}"},
+        )
+        return {"status": "dispatched", "backend": "coderabbit", "response_status": resp.status_code}
+    except Exception as e:
+        logger.error("coderabbit_dispatch_failed", error=str(e))
+        return {"status": "error", "backend": "coderabbit", "error": str(e)}
 
 
 async def _dispatch_copilot_review(owner: str, repo: str, pr_number: int) -> dict:
-    """Send review to GitHub Copilot Code Review."""
-    async with httpx.AsyncClient() as client:
-        try:
-            resp = await client.post(
-                f"https://api.github.com/repos/{owner}/{repo}/pulls/{pr_number}/reviews",
-                json={"event": "REQUEST_CHANGES", "body": "Automated review requested via Copilot"},
-                headers={
-                    "Authorization": f"Bearer {settings.github_token}",
-                    "Accept": "application/vnd.github.v3+json",
-                },
-                timeout=30,
-            )
-            return {"status": "dispatched", "backend": "copilot", "response_status": resp.status_code}
-        except Exception as e:
-            logger.error("copilot_dispatch_failed", error=str(e))
-            return {"status": "error", "backend": "copilot", "error": str(e)}
+    """Send review to GitHub Copilot Code Review (reuses shared HTTP client)."""
+    client = get_shared_client()
+    try:
+        resp = await client.post(
+            f"https://api.github.com/repos/{owner}/{repo}/pulls/{pr_number}/reviews",
+            json={"event": "REQUEST_CHANGES", "body": "Automated review requested via Copilot"},
+            headers={
+                "Authorization": f"Bearer {settings.github_token}",
+                "Accept": "application/vnd.github.v3+json",
+            },
+        )
+        return {"status": "dispatched", "backend": "copilot", "response_status": resp.status_code}
+    except Exception as e:
+        logger.error("copilot_dispatch_failed", error=str(e))
+        return {"status": "error", "backend": "copilot", "error": str(e)}
 
 
 async def _dispatch_cursor_review(owner: str, repo: str, pr_number: int) -> dict:
-    """Send review to Cursor code review."""
-    async with httpx.AsyncClient() as client:
-        try:
-            resp = await client.post(
-                os.getenv("CURSOR_WEBHOOK_URL", "http://localhost:3000/api/review"),
-                json={"owner": owner, "repo": repo, "pr_number": pr_number},
-                timeout=30,
-            )
-            return {"status": "dispatched", "backend": "cursor", "response_status": resp.status_code}
-        except Exception as e:
-            logger.error("cursor_dispatch_failed", error=str(e))
-            return {"status": "error", "backend": "cursor", "error": str(e)}
+    """Send review to Cursor code review (reuses shared HTTP client)."""
+    client = get_shared_client()
+    try:
+        resp = await client.post(
+            os.getenv("CURSOR_WEBHOOK_URL", "http://localhost:3000/api/review"),
+            json={"owner": owner, "repo": repo, "pr_number": pr_number},
+        )
+        return {"status": "dispatched", "backend": "cursor", "response_status": resp.status_code}
+    except Exception as e:
+        logger.error("cursor_dispatch_failed", error=str(e))
+        return {"status": "error", "backend": "cursor", "error": str(e)}
 
 
 async def post_check_run(
@@ -239,32 +269,31 @@ async def post_check_run(
     title: str,
     summary: str,
 ) -> None:
-    """Post a GitHub Check Run summarizing the review."""
+    """Post a GitHub Check Run summarizing the review (reuses shared HTTP client)."""
     if not settings.github_token:
         return
-    async with httpx.AsyncClient() as client:
-        try:
-            resp = await client.post(
-                f"https://api.github.com/repos/{owner}/{repo}/check-runs",
-                json={
-                    "name": "Unified Code Review",
-                    "head_sha": head_sha,
-                    "status": "completed",
-                    "conclusion": conclusion,
-                    "output": {
-                        "title": title,
-                        "summary": summary,
-                    },
+    client = get_shared_client()
+    try:
+        resp = await client.post(
+            f"https://api.github.com/repos/{owner}/{repo}/check-runs",
+            json={
+                "name": "Unified Code Review",
+                "head_sha": head_sha,
+                "status": "completed",
+                "conclusion": conclusion,
+                "output": {
+                    "title": title,
+                    "summary": summary,
                 },
-                headers={
-                    "Authorization": f"Bearer {settings.github_token}",
-                    "Accept": "application/vnd.github.v3+json",
-                },
-                timeout=30,
-            )
-            logger.info("check_run_posted", status=resp.status_code)
-        except Exception as e:
-            logger.error("check_run_failed", error=str(e))
+            },
+            headers={
+                "Authorization": f"Bearer {settings.github_token}",
+                "Accept": "application/vnd.github.v3+json",
+            },
+        )
+        logger.info("check_run_posted", status=resp.status_code)
+    except Exception as e:
+        logger.error("check_run_failed", error=str(e))
 
 
 # ── FastAPI App ───────────────────────────────────────────────────────────────────
@@ -272,8 +301,11 @@ async def post_check_run(
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("review_surface_starting", backends=AVAILABLE_BACKENDS)
+    # Pre-warm shared HTTP client so first request doesn't pay init cost
+    get_shared_client()
     yield
     logger.info("review_surface_shutting_down")
+    await close_shared_client()
 
 
 app = FastAPI(
@@ -287,9 +319,11 @@ app = FastAPI(
 
 @app.get("/health")
 async def health():
+    async with _state_lock:
+        pr_count = len(_pr_store)
     return {
         "status": "ok",
-        "pr_count": len(_pr_store),
+        "pr_count": pr_count,
         "backends": AVAILABLE_BACKENDS,
     }
 
@@ -325,16 +359,20 @@ async def github_webhook(request: Request):
         return JSONResponse({"status": "ignored", "action": action})
 
     # Pick backend
-    backend = _pick_backend(pr_key)
+    backend = await _pick_backend(pr_key)
 
-    # Rate limit check
-    if not _check_rate_limit(backend):
+    # Rate limit check (returns HTTP 429 so downstream clients can rely on HTTP semantics)
+    if not await _check_rate_limit(backend):
         logger.warning("rate_limit_exceeded", backend=backend)
-        return JSONResponse({
-            "status": "rate_limited",
-            "backend": backend,
-            "message": f"Rate limit exceeded for {backend} ({settings.rate_limit_per_hour}/hr)",
-        })
+        return JSONResponse(
+            status_code=429,
+            content={
+                "status": "rate_limited",
+                "backend": backend,
+                "message": f"Rate limit exceeded for {backend} ({settings.rate_limit_per_hour}/hr)",
+            },
+            headers={"Retry-After": "3600"},
+        )
 
     # Dispatch review
     result = await _perform_review(backend, owner, repo_name, pr_number, action)
@@ -363,7 +401,8 @@ async def github_webhook(request: Request):
 async def get_pr_state(owner: str, repo: str, number: int):
     """Get current review state for a PR."""
     pr_key = _get_pr_key(owner, repo, number)
-    state = _pr_store.get(pr_key)
+    async with _state_lock:
+        state = _pr_store.get(pr_key)
     if not state:
         return JSONResponse({"found": False, "pr": pr_key})
     return JSONResponse({"found": True, "state": state.model_dump()})
@@ -373,14 +412,15 @@ async def get_pr_state(owner: str, repo: str, number: int):
 async def clear_pr_state(owner: str, repo: str, number: int):
     """Clear review state for a PR (force reassign)."""
     pr_key = _get_pr_key(owner, repo, number)
-    _pr_store.pop(pr_key, None)
+    async with _state_lock:
+        _pr_store.pop(pr_key, None)
     return JSONResponse({"status": "cleared", "pr": pr_key})
 
 
 # ── Self-Tests ───────────────────────────────────────────────────────────────────
 
 def run_tests() -> dict:
-    """Run the 4 self-tests for the unified review surface.
+    """Run the 7 self-tests for the unified review surface.
 
     Each test prints ``PASS: <name>`` on success, or raises
     ``AssertionError("FAIL: <name>: <reason>")`` on failure. Returns a summary
@@ -389,6 +429,7 @@ def run_tests() -> dict:
     # Reset in-memory state so each test run is independent.
     _pr_store.clear()
     _rate_limiter.clear()
+    _state_lock = asyncio.Lock()  # fresh lock for test isolation
 
     client = TestClient(app)
     results: list[dict] = []
@@ -504,11 +545,66 @@ def run_tests() -> dict:
             )
         print("PASS: test_config_loads")
 
+    def test_rate_limit_returns_429() -> None:
+        # Fill all rate-limit buckets to force a 429 response from any backend.
+        now = datetime.now(timezone.utc)
+        _rate_limiter.clear()
+        for bk in AVAILABLE_BACKENDS:
+            _rate_limiter[bk] = [now] * settings.rate_limit_per_hour
+        payload = {
+            "action": "opened",
+            "pull_request": {"number": 7777, "head": {"sha": "ratelimit-sha"}},
+            "repository": {"name": "rate-limit-test", "owner": {"login": "KooshaPari"}},
+        }
+        resp = client.post(
+            "/webhook/github",
+            json=payload,
+            headers={"X-GitHub-Event": "pull_request"},
+        )
+        if resp.status_code != 429:
+            raise AssertionError(
+                f"test_rate_limit_returns_429: expected 429, got {resp.status_code} "
+                f"(body={resp.json()!r})"
+            )
+        body = resp.json()
+        if body.get("status") != "rate_limited":
+            raise AssertionError(
+                f"test_rate_limit_returns_429: expected status='rate_limited', got {body.get('status')!r}"
+            )
+        if "retry-after" not in {k.lower() for k in resp.headers}:
+            raise AssertionError(
+                f"test_rate_limit_returns_429: expected Retry-After header, got {dict(resp.headers)}"
+            )
+        print("PASS: test_rate_limit_returns_429")
+
+    def test_shared_client_reuse() -> None:
+        # Verify that get_shared_client() returns the same client instance across calls.
+        c1 = get_shared_client()
+        c2 = get_shared_client()
+        if c1 is not c2:
+            raise AssertionError(
+                f"test_shared_client_reuse: expected same client instance, "
+                f"got {id(c1)} vs {id(c2)}"
+            )
+        print("PASS: test_shared_client_reuse")
+
+    def test_state_lock_is_asyncio_lock() -> None:
+        # Verify that _state_lock is the correct lock type for concurrent-safety.
+        if not isinstance(_state_lock, asyncio.Lock):
+            raise AssertionError(
+                f"test_state_lock_is_asyncio_lock: expected asyncio.Lock, "
+                f"got {type(_state_lock).__name__}"
+            )
+        print("PASS: test_state_lock_is_asyncio_lock")
+
     tests = [
         ("test_pr_opened_assigns_tool", test_pr_opened_assigns_tool),
         ("test_sticky_assignment", test_sticky_assignment),
         ("test_rotation_different_prs", test_rotation_different_prs),
         ("test_config_loads", test_config_loads),
+        ("test_rate_limit_returns_429", test_rate_limit_returns_429),
+        ("test_shared_client_reuse", test_shared_client_reuse),
+        ("test_state_lock_is_asyncio_lock", test_state_lock_is_asyncio_lock),
     ]
 
     for name, fn in tests:
