@@ -2,6 +2,8 @@
 
 > Canonical operations infrastructure for the Phenotype fleet (~100 repos)
 
+[![AI slop inside](https://sladge.net/badge.svg)](https://sladge.net) [![GitHub Downloads (all assets, all releases)](https://img.shields.io/github/downloads/KooshaPari/phenotype-fleet-ops/total)](https://github.com/KooshaPari/phenotype-fleet-ops/releases)
+
 ## What This Repo Provides
 
 | Component | Purpose | Consumed By |
