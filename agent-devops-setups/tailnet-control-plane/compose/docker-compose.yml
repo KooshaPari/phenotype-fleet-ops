@@ -1,0 +1,81 @@
+services:
+  nats:
+    image: nats:2.10-alpine
+    command: ["-js", "-m", "8222"]
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+    volumes:
+      - nats_data:/data
+    restart: unless-stopped
+
+  dragonfly:
+    image: docker.dragonflydb.io/dragonflydb/dragonfly:latest
+    ports:
+      - "6379:6379"
+    ulimits:
+      memlock: -1
+    restart: unless-stopped
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: pheno
+      MINIO_ROOT_PASSWORD: phenochangeme
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    restart: unless-stopped
+
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      - minio
+    entrypoint: >
+      /bin/sh -c "
+      sleep 3;
+      mc alias set local http://minio:9000 pheno phenochangeme;
+      mc mb -p local/pheno-lake || true;
+      mc mb -p local/pheno-artifacts || true;
+      exit 0;
+      "
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: pheno
+      POSTGRES_PASSWORD: phenochangeme
+      POSTGRES_DB: pheno_catalog
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      - ./init-postgres.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    restart: unless-stopped
+
+  # Phase 2 — enable when analytics load justifies it
+  # clickhouse:
+  #   image: clickhouse/clickhouse-server:24.8
+  #   ports:
+  #     - "8123:8123"
+  #     - "9009:9000"
+  #   volumes:
+  #     - ch_data:/var/lib/clickhouse
+
+  # Optional Neo4j lineage — enable when graph queries are needed
+  # neo4j:
+  #   image: neo4j:5-community
+  #   environment:
+  #     NEO4J_AUTH: neo4j/phenochangeme
+  #   ports:
+  #     - "7474:7474"
+  #     - "7687:7687"
+
+volumes:
+  nats_data:
+  minio_data:
+  pg_data:
+  # ch_data:
