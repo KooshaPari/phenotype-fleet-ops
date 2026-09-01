@@ -1,0 +1,229 @@
+# macos-release.yml
+# Reusable workflow: build → sign → notarize → release for a single Tauri/Electron/Swift app.
+# Calls kooshapari/phenotype-fleet-ops/.github/workflows/macos-fetch-secrets.yml first.
+#
+# Required repo-level secrets (passed through to fetch-secrets):
+#   INFISICAL_TOKEN
+#
+# Required inputs:
+#   app-name           : human-readable app name (e.g. "OmniRoute")
+#   app-bundle-id      : reverse-DNS bundle id (e.g. "app.phenotype.omniroute")
+#   build-cmd          : shell command that produces the .app under $ARTIFACT_DIR
+#   entitlements-file  : path to the Entitlements.plist relative to repo root
+#
+# Optional inputs:
+#   artifact-dir       : default "dist/macos"
+#   create-dmg         : default true
+#   sign-identity      : default "Developer ID Application"
+#   runner-macos       : default "[self-hosted, macos, arm64, mac-signing]"
+#   runner-linux       : default "[self-hosted, linux, codesign]" (for rcodesign fallback)
+#
+# Usage from a consumer repo:
+#
+#   jobs:
+#     release-macos:
+#       uses: kooshapari/phenotype-fleet-ops/.github/workflows/macos-release.yml@main
+#       with:
+#         app-name: OmniRoute
+#         app-bundle-id: app.phenotype.omniroute
+#         build-cmd: |
+#           pnpm install --frozen-lockfile
+#           pnpm --filter desktop tauri build --target universal-apple-darwin
+#           cp -R apps/desktop/src-tauri/target/universal-apple-darwin/release/bundle/macos/${APP_NAME}.app dist/macos/
+#         entitlements-file: apps/desktop/src-tauri/Entitlements.plist
+#       secrets:
+#         INFISICAL_TOKEN: ${{ secrets.INFISICAL_TOKEN }}
+
+name: macOS Release
+
+on:
+  workflow_call:
+    inputs:
+      app-name:
+        type: string
+        required: true
+      app-bundle-id:
+        type: string
+        required: true
+      build-cmd:
+        type: string
+        required: true
+      entitlements-file:
+        type: string
+        required: true
+      artifact-dir:
+        type: string
+        required: false
+        default: "dist/macos"
+      create-dmg:
+        type: boolean
+        required: false
+        default: true
+      sign-identity:
+        type: string
+        required: false
+        default: "Developer ID Application"
+      runner-macos:
+        type: string
+        required: false
+        default: "[self-hosted, macos, arm64, mac-signing]"
+      runner-linux:
+        type: string
+        required: false
+        default: "[self-hosted, linux, codesign]"
+    secrets:
+      INFISICAL_TOKEN:
+        required: true
+
+concurrency:
+  group: macos-release-${{ inputs.app-name }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  APP_NAME: ${{ inputs.app-name }}
+  APP_BUNDLE_ID: ${{ inputs.app-bundle-id }}
+  ARTIFACT_DIR: ${{ inputs.artifact-dir }}
+
+jobs:
+  fetch-secrets:
+    name: Fetch Apple secrets
+    uses: ./.github/workflows/macos-fetch-secrets.yml
+    with:
+      secret-path: /apple/${{ github.event.repository.name }}
+    secrets:
+      INFISICAL_TOKEN: ${{ secrets.INFISICAL_TOKEN }}
+
+  build:
+    name: Build, sign, notarize (macOS runner)
+    needs: fetch-secrets
+    runs-on: ${{ inputs.runner-macos }}
+    timeout-minutes: 90
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build toolchain
+        run: |
+          set -euo pipefail
+          if [[ -f "Cargo.toml" ]]; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+            rustup target add aarch64-apple-darwin x86_64-apple-darwin
+            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          fi
+          if [[ -f "package.json" ]]; then
+            brew install node@20
+            echo "/usr/local/opt/node@20/bin" >> "$GITHUB_PATH"
+            corepack enable
+          fi
+          if [[ -f "pyproject.toml" ]]; then
+            brew install python@3.11
+            echo "/usr/local/opt/python@3.11/bin" >> "$GITHUB_PATH"
+          fi
+
+      - name: Build artifact
+        env:
+          APP_NAME: ${{ inputs.app-name }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$ARTIFACT_DIR"
+          ${{ inputs.build-cmd }}
+
+      - name: Verify .app exists
+        run: |
+          app="$(find "$ARTIFACT_DIR" -maxdepth 2 -name '*.app' | head -1)"
+          if [[ -z "$app" ]]; then
+            echo "::error::No .app bundle found under $ARTIFACT_DIR after build"
+            exit 1
+          fi
+          echo "APP_PATH=$app" >> "$GITHUB_ENV"
+
+      - name: Sign .app (codesign, hardened runtime)
+        env:
+          APPLE_DEVELOPER_ID_P12_PASSWORD: ${{ env.APPLE_DEVELOPER_ID_P12_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ inputs.sign-identity }}
+          ENTITLEMENTS_FILE: ${{ inputs.entitlements-file }}
+        run: |
+          set -euo pipefail
+          bash "$GITHUB_WORKSPACE/.github/reusable/macos-signing/sign_macos_native.sh" \
+            --target "$APP_PATH" \
+            --identity "$APPLE_SIGNING_IDENTITY" \
+            --entitlements "$ENTITLEMENTS_FILE" \
+            --options "runtime,hard" \
+            --deep true
+
+      - name: Verify signature
+        run: codesign --verify --strict --deep --verbose=2 "$APP_PATH"
+
+      - name: Build DMG
+        if: ${{ inputs.create-dmg }}
+        run: |
+          set -euo pipefail
+          dmg="$ARTIFACT_DIR/$APP_NAME.dmg"
+          if [[ ! -f "$dmg" ]]; then
+            hdiutil create -volname "$APP_NAME" -srcfolder "$APP_PATH" -ov -format UDZO "$dmg"
+          fi
+
+      - name: Notarize + staple DMG
+        if: ${{ inputs.create-dmg }}
+        env:
+          APPLE_NOTARIZATION_KEY_ID: ${{ env.APPLE_NOTARIZATION_KEY_ID }}
+          APPLE_NOTARIZATION_ISSUER_ID: ${{ env.APPLE_NOTARIZATION_ISSUER_ID }}
+          APPLE_TEAM_ID: ${{ env.APPLE_TEAM_ID }}
+          APPLE_BUNDLE_ID: ${{ inputs.app-bundle-id }}
+        run: |
+          set -euo pipefail
+          dmg="$(find "$ARTIFACT_DIR" -maxdepth 2 -name '*.dmg' | head -1)"
+          bash "$GITHUB_WORKSPACE/.github/reusable/macos-signing/notarize_macos_native.sh" \
+            --target "$dmg" \
+            --staple
+
+      - name: Notarize + staple .app (only if no DMG)
+        if: ${{ !inputs.create-dmg }}
+        env:
+          APPLE_NOTARIZATION_KEY_ID: ${{ env.APPLE_NOTARIZATION_KEY_ID }}
+          APPLE_NOTARIZATION_ISSUER_ID: ${{ env.APPLE_NOTARIZATION_ISSUER_ID }}
+          APPLE_TEAM_ID: ${{ env.APPLE_TEAM_ID }}
+          APPLE_BUNDLE_ID: ${{ inputs.app-bundle-id }}
+        run: |
+          set -euo pipefail
+          bash "$GITHUB_WORKSPACE/.github/reusable/macos-signing/notarize_macos_native.sh" \
+            --target "$APP_PATH" \
+            --staple
+
+      - name: Zip .app for distribution
+        run: |
+          set -euo pipefail
+          ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "$ARTIFACT_DIR/$APP_NAME.app.zip"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.app-name }}-macos-signed
+          path: |
+            ${{ inputs.artifact-dir }}/*.dmg
+            ${{ inputs.artifact-dir }}/*.app.zip
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: GitHub Release
+    needs: build
+    runs-on: ${{ inputs.runner-macos }}
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.app-name }}-macos-signed
+
+      - name: Create release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          generate_release_notes: true
+          files: |
+            *.dmg
+            *.app.zip
