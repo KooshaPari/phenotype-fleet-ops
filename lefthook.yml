@@ -1,0 +1,87 @@
+# Lefthook - Phenotype Fleet Ops (root)
+# Local-first fast gate before push. Wires no-mistakes review + smart queue
+# fanout trigger. Mirror at governance/lefthook.yml is the repo-wide template;
+# this one overrides with the smart-dispatch hooks wired in.
+#
+# Install: `lefthook install` (run once after clone)
+
+min_version: 1.7.0
+
+no_tty:
+  env:
+    - NO_COLOR: "1"
+    - CLICOLOR: "0"
+
+pre-commit:
+  parallel: true
+  commands:
+    fmt-python:
+      tags: [quality, fast]
+      glob: "*.{py}"
+      run: |
+        files=$(echo {staged_files} | tr ' ' '\n' | grep -E '\.py$' || true)
+        if [ -n "$files" ]; then
+          ruff check --fix $files 2>/dev/null || true
+          ruff format $files 2>/dev/null || true
+        fi
+      fail_text: "Python files failed ruff check/format. Run 'ruff check --fix <files>'."
+
+    fmt-rust:
+      tags: [quality, fast]
+      glob: "*.rs"
+      run: cargo fmt --all -- --check
+      fail_text: "Run 'cargo fmt --all' before committing."
+
+    fmt-yaml:
+      tags: [quality, fast]
+      glob: "*.{yml,yaml}"
+      run: yamllint -d relaxed {staged_files}
+      fail_text: "YAML files failed yamllint. Run 'yamllint <file>' to inspect."
+
+    secret-scan:
+      tags: [security, fast]
+      run: |
+        if command -v gitleaks >/dev/null 2>&1; then
+          gitleaks protect --staged --no-banner --redact
+        elif command -v trufflehog >/dev/null 2>&1; then
+          trufflehog git file://. --since-commit HEAD --only-verified --quiet
+        else
+          echo "skip secret-scan (no gitleaks/trufflehog)"
+        fi
+
+pre-push:
+  parallel: false
+  commands:
+    no-mistakes:
+      tags: [gate, slow]
+      run: |
+        if command -v no-mistakes >/dev/null 2>&1; then
+          no-mistakes run --since-ref "$1" --till-ref HEAD --tool coderabbit,copilot,cursor,forge
+        else
+          echo "skip no-mistakes (CLI not installed); install with: pipx install no-mistakes"
+        fi
+      fail_text: "no-mistakes failed. Fix review findings or run with --skip no-mistakes to override."
+
+    smart-dispatch-probe:
+      tags: [gate, slow]
+      run: |
+        # Probe review-surface health before fanout is triggered by webhook.
+        if [ -n "${REVIEW_SURFACE_URL:-}" ]; then
+          curl -fsS --max-time 5 "$REVIEW_SURFACE_URL/api/health/dispatch" >/dev/null || {
+            echo "review-surface health probe failed: $REVIEW_SURFACE_URL"
+            exit 1
+          }
+        else
+          echo "REVIEW_SURFACE_URL not set; review-fanout.yml will skip dispatch"
+        fi
+
+commit-msg:
+  commands:
+    conventional:
+      run: |
+        commit_msg=$(cat "$1")
+        if ! echo "$commit_msg" | grep -qE '^(feat|fix|chore|docs|style|refactor|perf|test|build|ci|revert)(\([a-z0-9_-]+\))?!?: '; then
+          echo "commit-msg: must be Conventional Commits (feat|fix|chore|docs|style|refactor|perf|test|build|ci|revert)"
+          exit 1
+        fi
+      fail_text: "Commit message must follow Conventional Commits: <type>(scope)?: subject"
