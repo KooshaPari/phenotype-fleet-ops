@@ -1,0 +1,111 @@
+name: Review Fanout
+
+# Proactive PR review: triggered on every PR open/synchronize, dispatches to
+# the smart-provider queue (CodeRabbit -> Copilot -> Cursor -> Forge) with
+# health-aware fallback. Requires the review-surface service to be reachable
+# (set REVIEW_SURFACE_URL to its deployed endpoint).
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+    inputs:
+      pull_request_number:
+        description: "PR number (when triggered manually)"
+        required: true
+        type: number
+
+permissions:
+  contents: read
+  pull-requests: write
+  checks: write
+  issues: write
+
+concurrency:
+  group: review-fanout-${{ github.event.pull_request.number || github.event.inputs.pull_request_number }}
+  cancel-in-progress: true
+
+env:
+  REVIEW_SURFACE_URL: ${{ vars.REVIEW_SURFACE_URL || 'https://review.phenotype.internal' }}
+  REVIEW_SURFACE_TOKEN: ${{ secrets.REVIEW_SURFACE_TOKEN }}
+  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+jobs:
+  enqueue:
+    name: Dispatch to smart queue
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Build fanout payload
+        id: payload
+        env:
+          EVENT: ${{ toJson(github.event) }}
+        run: |
+          cat > /tmp/payload.json <<'EOF'
+          {"event": "pull_request",
+           "action": "${{ github.event.action }}",
+           "pull_request": ${{ toJson(github.event.pull_request) }},
+           "repository": ${{ toJson(github.event.repository) }}
+          }
+          EOF
+          echo "payload_file=/tmp/payload.json" >> "$GITHUB_OUTPUT"
+
+      - name: Dispatch via smart queue
+        id: dispatch
+        env:
+          REVIEW_URL: ${{ env.REVIEW_SURFACE_URL }}
+          REVIEW_TOKEN: ${{ env.REVIEW_SURFACE_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.inputs.pull_request_number }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          python3 - "$REVIEW_URL" "$REVIEW_TOKEN" "$PR_NUMBER" "$REPO" <<'PY'
+          import os, sys, json, urllib.request, urllib.error
+
+          url, token, pr_number, repo = sys.argv[1:5]
+          endpoint = f"{url.rstrip('/')}/api/dispatch"
+          payload = {
+              "provider_priority": ["coderabbit", "copilot", "cursor", "forge"],
+              "pr_key": f"{repo}#{pr_number}",
+              "action": "opened",
+          }
+          req = urllib.request.Request(
+              endpoint,
+              data=json.dumps(payload).encode(),
+              headers={
+                  "Content-Type": "application/json",
+                  "Authorization": f"Bearer {token}" if token else "",
+              },
+              method="POST",
+          )
+          try:
+              with urllib.request.urlopen(req, timeout=30) as r:
+                  body = json.loads(r.read())
+                  print(f"DISPATCH_OK: provider={body.get('chosen_provider')} reason={body.get('reason')}")
+                  sys.exit(0)
+          except urllib.error.HTTPError as e:
+              print(f"DISPATCH_HTTP_ERROR: {e.code} {e.reason}")
+              # 429 means dispatcher fell back but exhausted — surface as warning, not fail
+              if e.code == 429:
+                  print("Rate limit exhausted across all providers; skipping proactively.")
+                  sys.exit(0)
+              sys.exit(1)
+          except Exception as e:
+              print(f"DISPATCH_FAIL: {type(e).__name__}: {e}")
+              sys.exit(1)
+          PY
+
+      - name: Annotate with provider used
+        if: steps.dispatch.outcome == 'success' && env.REVIEW_SURFACE_URL != ''
+        uses: actions/github-script@60a0d83039c74a4a7acff7c3c51437a303f4aa0a
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            if (!pr) return;
+            const body = `🤖 Review dispatched via smart queue.\n\n- Trigger: \`${{ github.event.action }}\`\n- PR: #${{ github.event.pull_request.number || github.event.inputs.pull_request_number }}\n- HEAD: \`${pr.head?.sha?.slice(0, 7) ?? 'manual'}\`\n\n> Provider priority at dispatch: coderabbit → copilot → cursor → forge. Rate-limited providers automatically cooldown for 5 min.`;
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: pr.number,
+              body,
+            });
