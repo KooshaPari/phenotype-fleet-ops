@@ -7,10 +7,11 @@
 
 min_version: 1.7.0
 
-no_tty:
-  env:
-    - NO_COLOR: "1"
-    - CLICOLOR: "0"
+no_tty: true
+
+env:
+  - NO_COLOR: "1"
+  - CLICOLOR: "0"
 
 pre-commit:
   parallel: true
