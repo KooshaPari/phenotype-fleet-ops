@@ -6,8 +6,8 @@ Single GitHub org webhook endpoint that:
 3. Persists tool assignment for follow-up reviews
 4. Posts results as a single GitHub Check Run
 """
+
 import os
-import random
 import json
 import hashlib
 import hmac
@@ -19,14 +19,12 @@ from contextlib import asynccontextmanager
 
 import httpx
 import yaml
-from fastapi import FastAPI, Request, HTTPException, Depends, Query
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from pydantic_settings import BaseSettings
 import structlog
-
-logger = structlog.get_logger()
 
 # Providers, rate-limit-aware fallback, and retroactive scanner live in
 # sibling modules so this file stays the orchestration surface only.
@@ -38,13 +36,14 @@ from smart_dispatcher import (
 )
 from retroactive_scanner import (
     PRCommentScanner,
-    ScanReport,
-    Finding,
     upsert_tracking_issue,
 )
 
+logger = structlog.get_logger()
+
 
 # ── Configuration ────────────────────────────────────────────────────────────────
+
 
 class Settings(BaseSettings):
     github_webhook_secret: str = ""
@@ -69,6 +68,7 @@ structlog.configure(
 
 # ── Config YAML loader ──────────────────────────────────────────────────────────
 
+
 def load_config(path: str = "config.yaml") -> dict:
     """Load runtime config from a YAML file.
 
@@ -89,8 +89,10 @@ def load_config(path: str = "config.yaml") -> dict:
 
 # ── State ────────────────────────────────────────────────────────────────────────
 
+
 class PRState(BaseModel):
     """Persistent state for a PR's review assignment."""
+
     pr_id: str  # "owner/repo#number"
     backend: str
     assigned_at: str  # ISO 8601
@@ -112,7 +114,9 @@ _dispatcher_tracker: RateLimitTracker = RateLimitTracker()
 _smart_dispatcher: SmartDispatcher = SmartDispatcher(
     tracker=_dispatcher_tracker,
     priority=tuple(AVAILABLE_BACKENDS) or tuple(PROVIDER_CAPS.keys()),
-    enabled=set(AVAILABLE_BACKENDS) if AVAILABLE_BACKENDS else set(PROVIDER_CAPS.keys()),
+    enabled=set(AVAILABLE_BACKENDS)
+    if AVAILABLE_BACKENDS
+    else set(PROVIDER_CAPS.keys()),
 )
 
 # Shared HTTP client (reused across requests instead of per-call instances)
@@ -136,6 +140,7 @@ async def close_shared_client() -> None:
 
 
 # ── GitHub Webhook Handler ──────────────────────────────────────────────────────
+
 
 async def verify_webhook_signature(request: Request, payload: bytes) -> bool:
     """Verify X-Hub-Signature-256 against payload."""
@@ -214,7 +219,9 @@ async def _check_rate_limit(backend: str) -> bool:
         hour_ago = now.timestamp() - 3600
         if backend not in _rate_limiter:
             _rate_limiter[backend] = []
-        _rate_limiter[backend] = [t for t in _rate_limiter[backend] if t.timestamp() > hour_ago]
+        _rate_limiter[backend] = [
+            t for t in _rate_limiter[backend] if t.timestamp() > hour_ago
+        ]
         if len(_rate_limiter[backend]) >= settings.rate_limit_per_hour:
             return False
         if _smart_dispatcher.tracker.in_cooldown(backend):
@@ -273,11 +280,15 @@ async def _dispatch_coderabbit_review(owner: str, repo: str, pr_number: int) -> 
     client = get_shared_client()
     try:
         resp = await client.post(
-            f"https://api.coderabbit.ai/v1/reviews",
+            "https://api.coderabbit.ai/v1/reviews",
             json={"owner": owner, "repo": repo, "pr_number": pr_number},
             headers={"Authorization": f"Bearer {os.getenv('CODERABBIT_TOKEN', '')}"},
         )
-        return {"status": "dispatched", "backend": "coderabbit", "response_status": resp.status_code}
+        return {
+            "status": "dispatched",
+            "backend": "coderabbit",
+            "response_status": resp.status_code,
+        }
     except Exception as e:
         logger.error("coderabbit_dispatch_failed", error=str(e))
         return {"status": "error", "backend": "coderabbit", "error": str(e)}
@@ -289,13 +300,20 @@ async def _dispatch_copilot_review(owner: str, repo: str, pr_number: int) -> dic
     try:
         resp = await client.post(
             f"https://api.github.com/repos/{owner}/{repo}/pulls/{pr_number}/reviews",
-            json={"event": "REQUEST_CHANGES", "body": "Automated review requested via Copilot"},
+            json={
+                "event": "REQUEST_CHANGES",
+                "body": "Automated review requested via Copilot",
+            },
             headers={
                 "Authorization": f"Bearer {settings.github_token}",
                 "Accept": "application/vnd.github.v3+json",
             },
         )
-        return {"status": "dispatched", "backend": "copilot", "response_status": resp.status_code}
+        return {
+            "status": "dispatched",
+            "backend": "copilot",
+            "response_status": resp.status_code,
+        }
     except Exception as e:
         logger.error("copilot_dispatch_failed", error=str(e))
         return {"status": "error", "backend": "copilot", "error": str(e)}
@@ -309,7 +327,11 @@ async def _dispatch_cursor_review(owner: str, repo: str, pr_number: int) -> dict
             os.getenv("CURSOR_WEBHOOK_URL", "http://localhost:3000/api/review"),
             json={"owner": owner, "repo": repo, "pr_number": pr_number},
         )
-        return {"status": "dispatched", "backend": "cursor", "response_status": resp.status_code}
+        return {
+            "status": "dispatched",
+            "backend": "cursor",
+            "response_status": resp.status_code,
+        }
     except Exception as e:
         logger.error("cursor_dispatch_failed", error=str(e))
         return {"status": "error", "backend": "cursor", "error": str(e)}
@@ -352,6 +374,7 @@ async def post_check_run(
 
 # ── FastAPI App ───────────────────────────────────────────────────────────────────
 
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("review_surface_starting", backends=AVAILABLE_BACKENDS)
@@ -370,6 +393,7 @@ app = FastAPI(
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────────
+
 
 @app.get("/health")
 async def health():
@@ -406,7 +430,9 @@ async def github_webhook(request: Request):
     head_sha = pr.get("head", {}).get("sha", "")
 
     pr_key = _get_pr_key(owner, repo_name, pr_number)
-    logger.info("pull_request_event", owner=owner, repo=repo_name, pr=pr_number, action=action)
+    logger.info(
+        "pull_request_event", owner=owner, repo=repo_name, pr=pr_number, action=action
+    )
 
     # Only review on opened or synchronize
     if action not in ("opened", "synchronize"):
@@ -450,7 +476,9 @@ async def github_webhook(request: Request):
             iteration=len(excluded),
         )
         if len(excluded) > 10:
-            logger.error("rate_limit_loop_bounded", pr=pr_key, excluded=sorted(excluded))
+            logger.error(
+                "rate_limit_loop_bounded", pr=pr_key, excluded=sorted(excluded)
+            )
             return JSONResponse(
                 status_code=429,
                 content={
@@ -506,13 +534,15 @@ async def github_webhook(request: Request):
             summary=f"Review dispatched to **{backend}** for {owner}/{repo_name}#{pr_number}",
         )
 
-    return JSONResponse({
-        "status": "processed",
-        "backend": backend,
-        "pr": pr_key,
-        "action": action,
-        "result": result,
-    })
+    return JSONResponse(
+        {
+            "status": "processed",
+            "backend": backend,
+            "pr": pr_key,
+            "action": action,
+            "result": result,
+        }
+    )
 
 
 @app.get("/api/state/{owner}/{repo}/{number}")
@@ -537,13 +567,16 @@ async def clear_pr_state(owner: str, repo: str, number: int):
 
 # ── Smart dispatcher API ─────────────────────────────────────────────────────
 
+
 @app.get("/api/dispatch/status")
 async def dispatch_status():
     """Health snapshot for every provider in the fallback chain."""
-    return JSONResponse({
-        "priority": list(_smart_dispatcher.priority),
-        "providers": _dispatcher_tracker.snapshot(),
-    })
+    return JSONResponse(
+        {
+            "priority": list(_smart_dispatcher.priority),
+            "providers": _dispatcher_tracker.snapshot(),
+        }
+    )
 
 
 class DispatchRequest(BaseModel):
@@ -552,7 +585,7 @@ class DispatchRequest(BaseModel):
     number: int
     head_sha: Optional[str] = None
     provider: Optional[str] = None  # explicit pick, overrides dispatcher
-    force: bool = False             # ignore cooldown / rate limits
+    force: bool = False  # ignore cooldown / rate limits
     action: str = "opened"
 
 
@@ -566,7 +599,9 @@ async def manual_dispatch(req: DispatchRequest):
 
     if req.provider:
         if req.provider not in PROVIDER_CAPS:
-            raise HTTPException(status_code=400, detail=f"Unknown provider: {req.provider}")
+            raise HTTPException(
+                status_code=400, detail=f"Unknown provider: {req.provider}"
+            )
         backend = req.provider
         _smart_dispatcher.consume(backend)
     elif req.force:
@@ -577,7 +612,10 @@ async def manual_dispatch(req: DispatchRequest):
         while not await _check_rate_limit(backend):
             excluded.add(backend)
             next_pick = _smart_dispatcher.pick_or_fallback(excluded=excluded)
-            if next_pick.provider == backend or next_pick.reason == "all_blocked_fallback":
+            if (
+                next_pick.provider == backend
+                or next_pick.reason == "all_blocked_fallback"
+            ):
                 raise HTTPException(
                     status_code=429,
                     detail=f"All providers rate-limited or in cooldown: {sorted(excluded)}",
@@ -603,15 +641,18 @@ async def manual_dispatch(req: DispatchRequest):
             summary=f"Review dispatched to **{backend}** for {req.owner}/{req.repo}#{req.number}",
         )
 
-    return JSONResponse({
-        "status": "processed",
-        "backend": backend,
-        "pr": pr_key,
-        "result": result,
-    })
+    return JSONResponse(
+        {
+            "status": "processed",
+            "backend": backend,
+            "pr": pr_key,
+            "result": result,
+        }
+    )
 
 
 # ── Retroactive scanner API ──────────────────────────────────────────────────
+
 
 class ScanRequest(BaseModel):
     owner: str
@@ -666,6 +707,7 @@ async def retroactive_scan(req: ScanRequest):
 
 
 # ── Self-Tests ───────────────────────────────────────────────────────────────────
+
 
 def run_tests() -> dict:
     """Run the 7 self-tests for the unified review surface.
@@ -727,7 +769,10 @@ def run_tests() -> dict:
         payload_opened = {
             "action": "opened",
             "pull_request": {"number": 9999, "head": {"sha": "deadbeef"}},
-            "repository": {"name": "sticky-test-repo", "owner": {"login": "KooshaPari"}},
+            "repository": {
+                "name": "sticky-test-repo",
+                "owner": {"login": "KooshaPari"},
+            },
         }
         resp1 = client.post(
             "/webhook/github",
@@ -882,7 +927,7 @@ def run_tests() -> dict:
             # After exit the client must be closed.
             assert s._client is None
 
-        asyncio.get_event_loop().run_until_complete(_run())
+        asyncio.run(_run())
         print("PASS: test_scanner_health")
 
     tests = [
@@ -918,6 +963,7 @@ def run_tests() -> dict:
 if __name__ == "__main__":
     import uvicorn
     import logging
+
     uvicorn.run(
         "main:app",
         host="0.0.0.0",

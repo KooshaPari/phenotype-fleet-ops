@@ -16,16 +16,18 @@ Exit codes:
   2  invalid target (no .git, not in a working tree)
   3  partial install (some files existed and were skipped)
 """
+
 from __future__ import annotations
 
 import argparse
-import os
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[2]  # tools/review-surface-boot/review-surface-boot.py -> tools -> phenotype-fleet-ops
+REPO_ROOT = (
+    Path(__file__).resolve().parents[2]
+)  # tools/review-surface-boot/review-surface-boot.py -> tools -> phenotype-fleet-ops
 SOURCE_WORKFLOWS = REPO_ROOT / ".github" / "workflows"
 SOURCE_TEMPLATES = REPO_ROOT / ".github" / "ISSUE_TEMPLATE"
 SOURCE_LEFTHOOK = REPO_ROOT / "lefthook.yml"
@@ -100,7 +102,9 @@ def git_status_clean(target: Path) -> bool:
     try:
         r = subprocess.run(
             ["git", "-C", str(target), "status", "--porcelain"],
-            capture_output=True, text=True, check=True,
+            capture_output=True,
+            text=True,
+            check=True,
         )
         return r.stdout.strip() == ""
     except subprocess.CalledProcessError as e:
@@ -109,9 +113,13 @@ def git_status_clean(target: Path) -> bool:
 
 
 def main() -> int:
-    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     p.add_argument("target", help="Path to target repository (must contain .git)")
-    p.add_argument("--dry-run", action="store_true", help="Report what would change, don't write")
+    p.add_argument(
+        "--dry-run", action="store_true", help="Report what would change, don't write"
+    )
     p.add_argument("--skip-lefthook", action="store_true")
     p.add_argument("--skip-templates", action="store_true")
     p.add_argument("--skip-workflows", action="store_true")
@@ -127,7 +135,9 @@ def main() -> int:
         return 2
 
     if not git_status_clean(target):
-        warn("target has uncommitted changes; proceeding but review the diff before commit")
+        warn(
+            "target has uncommitted changes; proceeding but review the diff before commit"
+        )
 
     print(f"review-surface-boot -> {target}")
     partial_total = 0
@@ -142,19 +152,33 @@ def main() -> int:
     if args.commit and not args.dry_run:
         try:
             subprocess.run(
-                ["git", "-C", str(target), "add"] +
-                [str(target / ".github" / "workflows" / f) for f in WORKFLOW_FILES if not args.skip_workflows] +
-                [str(target / ".github" / "ISSUE_TEMPLATE" / f) for f in TEMPLATE_FILES if not args.skip_templates] +
-                ([str(target / LEFTHOOK_FILE)] if not args.skip_lefthook else []),
+                ["git", "-C", str(target), "add"]
+                + [
+                    str(target / ".github" / "workflows" / f)
+                    for f in WORKFLOW_FILES
+                    if not args.skip_workflows
+                ]
+                + [
+                    str(target / ".github" / "ISSUE_TEMPLATE" / f)
+                    for f in TEMPLATE_FILES
+                    if not args.skip_templates
+                ]
+                + ([str(target / LEFTHOOK_FILE)] if not args.skip_lefthook else []),
                 check=True,
             )
             subprocess.run(
-                ["git", "-C", str(target), "commit", "-m",
-                 "chore(ci): install review-surface fanout, sweep, and lefthook\n\n"
-                 "Adds proactive CodeRabbit/Copilot/Cursor/Forge review fanout on PR\n"
-                 "open/synchronize, weekly retroactive sweep over closed PRs, and a\n"
-                 "fleet-ops root lefthook for local pre-commit + dispatch.\n\n"
-                 "Sourced from phenotype-fleet-ops/tools/review-surface-boot."],
+                [
+                    "git",
+                    "-C",
+                    str(target),
+                    "commit",
+                    "-m",
+                    "chore(ci): install review-surface fanout, sweep, and lefthook\n\n"
+                    "Adds proactive CodeRabbit/Copilot/Cursor/Forge review fanout on PR\n"
+                    "open/synchronize, weekly retroactive sweep over closed PRs, and a\n"
+                    "fleet-ops root lefthook for local pre-commit + dispatch.\n\n"
+                    "Sourced from phenotype-fleet-ops/tools/review-surface-boot.",
+                ],
                 check=True,
             )
             info("commit created")

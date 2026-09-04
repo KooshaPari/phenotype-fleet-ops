@@ -15,14 +15,13 @@ For each PR with ≥ 1 ignored finding it opens (or updates) a tracking issue
 labelled `retroactive-review-finding`. That keeps the audit log in GitHub
 where humans already look.
 """
+
 from __future__ import annotations
 
-import json
 import re
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
 from typing import Any, Iterable, Optional
-from urllib.parse import urlencode
 
 import httpx
 
@@ -79,7 +78,9 @@ class ScanReport:
     prs_with_findings: int = 0
     findings: list[Finding] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
-    scanned_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    scanned_at: str = field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+    )
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -133,6 +134,7 @@ def classify(body: str) -> tuple[str, bool]:
 
 # ── Scanner ───────────────────────────────────────────────────────────────────
 
+
 class PRCommentScanner:
     """Walks a repo's PR history via the GitHub REST API."""
 
@@ -150,6 +152,7 @@ class PRCommentScanner:
         self.max_prs = max_prs
         self.only_states = set(only_states)
         self.include_bot_authors = include_bot_authors
+        self.timeout = timeout
         self._client: Optional[httpx.AsyncClient] = None
 
     async def __aenter__(self) -> "PRCommentScanner":
@@ -168,6 +171,7 @@ class PRCommentScanner:
     async def __aexit__(self, *exc: Any) -> None:
         if self._client is not None:
             await self._client.aclose()
+            self._client = None
 
     @property
     def client(self) -> httpx.AsyncClient:
@@ -188,13 +192,20 @@ class PRCommentScanner:
         items = r.json()
         if self.only_states:
             items = [
-                p for p in items
+                p
+                for p in items
                 if (p.get("state") == "merged" and "merged" in self.only_states)
-                or (p.get("state") == "closed" and not p.get("merged_at") and "closed" in self.only_states)
+                or (
+                    p.get("state") == "closed"
+                    and not p.get("merged_at")
+                    and "closed" in self.only_states
+                )
             ]
         return items
 
-    async def list_review_comments(self, owner: str, repo: str, pr_number: int) -> list[dict[str, Any]]:
+    async def list_review_comments(
+        self, owner: str, repo: str, pr_number: int
+    ) -> list[dict[str, Any]]:
         r = await self.client.get(
             f"/repos/{owner}/{repo}/pulls/{pr_number}/comments",
             params={"per_page": "100"},
@@ -202,7 +213,9 @@ class PRCommentScanner:
         r.raise_for_status()
         return r.json()
 
-    async def list_issue_comments(self, owner: str, repo: str, pr_number: int) -> list[dict[str, Any]]:
+    async def list_issue_comments(
+        self, owner: str, repo: str, pr_number: int
+    ) -> list[dict[str, Any]]:
         r = await self.client.get(
             f"/repos/{owner}/{repo}/issues/{pr_number}/comments",
             params={"per_page": "100"},
@@ -256,7 +269,11 @@ class PRCommentScanner:
     ) -> Optional[Finding]:
         author = (comment.get("user") or {}).get("login", "")
         body = comment.get("body") or ""
-        kind = "inline" if "pull_request_review_id" in comment or "path" in comment else "issue"
+        kind = (
+            "inline"
+            if "pull_request_review_id" in comment or "path" in comment
+            else "issue"
+        )
         author_l = author.lower()
 
         is_bot = author_l in BOT_LOGINS or author_l.endswith("[bot]")
@@ -286,6 +303,7 @@ class PRCommentScanner:
 
 
 # ── Issue persistence ─────────────────────────────────────────────────────────
+
 
 def render_issue_body(repo: str, findings: list[Finding]) -> dict[str, str]:
     """Build title + body for the tracking issue that the scanner will open."""
@@ -350,7 +368,11 @@ async def upsert_tracking_issue(
             f"/repos/{owner}/{repo}/issues/{existing['number']}",
             json={"title": title, "body": body, "labels": [label]},
         )
-        return {"action": "updated", "issue": existing["number"], "url": existing["html_url"]}
+        return {
+            "action": "updated",
+            "issue": existing["number"],
+            "url": existing["html_url"],
+        }
 
     payload = {
         "title": title,
@@ -359,7 +381,10 @@ async def upsert_tracking_issue(
     }
     created = await client.post(f"/repos/{owner}/{repo}/issues", json=payload)
     if created.status_code >= 300:
-        return {"action": "create_failed", "status": created.status_code, "body": created.text}
+        return {
+            "action": "create_failed",
+            "status": created.status_code,
+            "body": created.text,
+        }
     j = created.json()
     return {"action": "created", "issue": j.get("number"), "url": j.get("html_url")}
-

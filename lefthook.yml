@@ -80,7 +80,11 @@ commit-msg:
   commands:
     conventional:
       run: |
-        commit_msg=$(cat "$1")
+        commit_msg=$(cat "${1:-$(git rev-parse --git-dir)/COMMIT_EDITMSG}" 2>/dev/null || echo "")
+        if [ -z "$commit_msg" ]; then
+          echo "commit-msg: unable to read commit message"
+          exit 1
+        fi
         if ! echo "$commit_msg" | grep -qE '^(feat|fix|chore|docs|style|refactor|perf|test|build|ci|revert)(\([a-z0-9_-]+\))?!?: '; then
           echo "commit-msg: must be Conventional Commits (feat|fix|chore|docs|style|refactor|perf|test|build|ci|revert)"
           exit 1

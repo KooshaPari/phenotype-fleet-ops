@@ -10,6 +10,7 @@ Decisions are made purely from in-memory state so the dispatcher stays cheap
 (no extra network calls per request). Persistent state is owned by the
 caller's RateLimitTracker.
 """
+
 from __future__ import annotations
 
 import time
@@ -25,12 +26,42 @@ from typing import Any, Iterable, Optional
 # falls back *before* the vendor actually 429s us, avoiding one wasted retry.
 
 PROVIDER_CAPS: dict[str, dict[str, Any]] = {
-    "coderabbit":  {"tier": "free",  "per_hour": 3,   "cost_per_review": 0.0,  "label": "CodeRabbit (free)"},
-    "copilot":     {"tier": "free",  "per_hour": 5,   "cost_per_review": 0.0,  "label": "Copilot PR review"},
-    "cursor":      {"tier": "free",  "per_hour": 4,   "cost_per_review": 0.0,  "label": "Cursor background"},
-    "gemini":      {"tier": "free",  "per_hour": 10,  "cost_per_review": 0.0,  "label": "Gemini Code Assist"},
-    "thegent":     {"tier": "self",  "per_hour": 30,  "cost_per_review": 0.0,  "label": "thegent (self-hosted)"},
-    "forge":       {"tier": "self",  "per_hour": 60,  "cost_per_review": 0.0,  "label": "Forge local agent"},
+    "coderabbit": {
+        "tier": "free",
+        "per_hour": 3,
+        "cost_per_review": 0.0,
+        "label": "CodeRabbit (free)",
+    },
+    "copilot": {
+        "tier": "free",
+        "per_hour": 5,
+        "cost_per_review": 0.0,
+        "label": "Copilot PR review",
+    },
+    "cursor": {
+        "tier": "free",
+        "per_hour": 4,
+        "cost_per_review": 0.0,
+        "label": "Cursor background",
+    },
+    "gemini": {
+        "tier": "free",
+        "per_hour": 10,
+        "cost_per_review": 0.0,
+        "label": "Gemini Code Assist",
+    },
+    "thegent": {
+        "tier": "self",
+        "per_hour": 30,
+        "cost_per_review": 0.0,
+        "label": "thegent (self-hosted)",
+    },
+    "forge": {
+        "tier": "self",
+        "per_hour": 60,
+        "cost_per_review": 0.0,
+        "label": "Forge local agent",
+    },
 }
 
 
@@ -41,20 +72,37 @@ PROVIDER_CAPS: dict[str, dict[str, Any]] = {
 # * means default-capable (no special filter applied).
 
 _PROVIDER_CAPABILITIES: dict[str, set[str]] = {
-    "coderabbit": {"diff", "files", "lang:any",          "comment:inline", "comment:summary"},
-    "copilot":    {"diff", "files", "lang:any",          "comment:inline"},
-    "cursor":     {"diff", "files", "lang:ts,js,py,go,rust", "comment:inline"},
-    "gemini":     {"diff", "files", "lang:any",          "comment:summary"},
-    "thegent":    {"diff", "files", "lang:any",          "comment:inline", "comment:summary", "ollama:local"},
-    "forge":      {"diff", "files", "lang:any",          "comment:inline", "comment:summary", "ollama:local", "agent:tools"},
+    "coderabbit": {"diff", "files", "lang:any", "comment:inline", "comment:summary"},
+    "copilot": {"diff", "files", "lang:any", "comment:inline"},
+    "cursor": {"diff", "files", "lang:ts,js,py,go,rust", "comment:inline"},
+    "gemini": {"diff", "files", "lang:any", "comment:summary"},
+    "thegent": {
+        "diff",
+        "files",
+        "lang:any",
+        "comment:inline",
+        "comment:summary",
+        "ollama:local",
+    },
+    "forge": {
+        "diff",
+        "files",
+        "lang:any",
+        "comment:inline",
+        "comment:summary",
+        "ollama:local",
+        "agent:tools",
+    },
 }
 
 
 # ── Runtime health state ───────────────────────────────────────────────────────
 
+
 @dataclass
 class ProviderStats:
     """Mutable rolling-window stats for one provider."""
+
     recent_calls: list[float] = field(default_factory=list)  # UNIX timestamps
     recent_failures: int = 0
     last_error_at: Optional[float] = None
@@ -100,7 +148,9 @@ class RateLimitTracker:
 
     def record_success(self, provider: str) -> None:
         with self._lock:
-            self._get(provider).recent_failures = max(0, self._get(provider).recent_failures - 1)
+            self._get(provider).recent_failures = max(
+                0, self._get(provider).recent_failures - 1
+            )
 
     def record_failure(
         self,
@@ -143,6 +193,7 @@ class RateLimitTracker:
         """Read-only snapshot for /health endpoints."""
         with self._lock:
             out: dict[str, dict[str, Any]] = {}
+            now = time.time()
             for name, cap in PROVIDER_CAPS.items():
                 if name not in self._stats:
                     out[name] = {
@@ -154,11 +205,17 @@ class RateLimitTracker:
                         "last_error_kind": None,
                     }
                     continue
-                s = self.prune(name, time.time())
+                s = self.prune(name, now)
+                # Compute cooldown inline rather than calling
+                # self.in_cooldown(), which would re-acquire the
+                # non-reentrant lock and self-deadlock.
+                if s.cooldown_until is not None and s.cooldown_until <= now:
+                    s.cooldown_until = None
                 out[name] = {
                     "enabled": True,
                     "cap_per_hour": cap["per_hour"],
-                    "in_cooldown": self.in_cooldown(name),
+                    "in_cooldown": s.cooldown_until is not None
+                    and s.cooldown_until > now,
                     "slots_available": max(0, cap["per_hour"] - len(s.recent_calls)),
                     "recent_failures": s.recent_failures,
                     "last_error_kind": s.last_error_kind,
