@@ -56,12 +56,19 @@ pre-push:
     no-mistakes:
       tags: [gate, slow]
       run: |
+        # no-mistakes gating is driven explicitly via `no-mistakes axi run`,
+        # not auto-invoked on every push. Here we only surface whether the
+        # repo is initialized so un-gated pushes are loud, never silent.
         if command -v no-mistakes >/dev/null 2>&1; then
-          no-mistakes run --since-ref "$1" --till-ref HEAD --tool coderabbit,copilot,cursor,forge
+          if [ -f .no-mistakes.yaml ]; then
+            echo "no-mistakes is initialized; drive validation with: no-mistakes axi run --intent \"<goal>\""
+          else
+            echo "no-mistakes installed but repo not initialized; run: no-mistakes init"
+          fi
         else
           echo "skip no-mistakes (CLI not installed); install with: pipx install no-mistakes"
         fi
-      fail_text: "no-mistakes failed. Fix review findings or run with --skip no-mistakes to override."
+      fail_text: "Review the no-mistakes guidance above before pushing."
 
     smart-dispatch-probe:
       tags: [gate, slow]
