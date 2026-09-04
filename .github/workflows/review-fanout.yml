@@ -97,7 +97,7 @@ jobs:
 
       - name: Annotate with provider used
         if: steps.dispatch.outcome == 'success' && env.REVIEW_SURFACE_URL != ''
-        uses: actions/github-script@60a0d83039c74a4a7acff7c3c51437a303f4aa0a
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
         with:
           script: |
             const pr = context.payload.pull_request;

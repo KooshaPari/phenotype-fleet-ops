@@ -179,6 +179,10 @@ jobs:
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
+        with:
+          # gitleaks-action derives the PR range from the repository history.
+          # Keep the base commit available for both PR and push events.
+          fetch-depth: 0
       - name: gitleaks
         uses: gitleaks/gitleaks-action@v2
         env:
