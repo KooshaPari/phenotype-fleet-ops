@@ -1,0 +1,193 @@
+name: Retroactive Review Sweep
+
+on:
+  pull_request_review:
+    types: [submitted, edited, dismissed]
+  issue_comment:
+    types: [created, edited]
+  schedule:
+    # Weekly on Sunday 03:00 UTC
+    - cron: "0 3 * * 0"
+  workflow_dispatch:
+    inputs:
+      since_days:
+        description: "Lookback window in days (default 7)"
+        required: false
+        type: number
+        default: 7
+      max_prs:
+        description: "Max PRs to scan per repo (default 50)"
+        required: false
+        type: number
+        default: 50
+      include_bot_authors:
+        description: "Include comments authored by bots"
+        required: false
+        type: boolean
+        default: false
+      dry_run:
+        description: "Dry-run only (no issues/draft PRs created)"
+        required: false
+        type: boolean
+        default: false
+      repos:
+        description: "JSON list of owner/repo pairs (default: ${{ github.repository }})"
+        required: false
+        type: string
+        default: ""
+  workflow_call:
+    inputs:
+      since_days:
+        description: "Lookback window in days"
+        required: false
+        type: number
+        default: 7
+      max_prs:
+        description: "Max PRs to scan per repo"
+        required: false
+        type: number
+        default: 50
+      include_bot_authors:
+        description: "Include comments authored by bots"
+        required: false
+        type: boolean
+        default: false
+      dry_run:
+        description: "Dry-run only (no issues/draft PRs created)"
+        required: false
+        type: boolean
+        default: false
+      repos:
+        description: "JSON list of owner/repo pairs (default: caller)"
+        required: false
+        type: string
+        default: ""
+permissions:
+  contents: read
+  pull-requests: read
+  issues: write
+
+concurrency:
+  group: retroactive-sweep
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    name: Scan historical review comments
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      REVIEW_SURFACE_URL: ${{ vars.REVIEW_SURFACE_URL || 'https://review.phenotype.internal' }}
+      REVIEW_SURFACE_TOKEN: ${{ secrets.REVIEW_SURFACE_TOKEN }}
+    steps:
+      - name: Resolve scan parameters
+        id: params
+        run: |
+          echo "lookback=${LOOKBACK:-30}" >> "$GITHUB_OUTPUT"
+          echo "max_prs=${MAX_PRS:-20}" >> "$GITHUB_OUTPUT"
+          echo "repo=${REPO_OVERRIDE:-${{ github.repository }}}" >> "$GITHUB_OUTPUT"
+          echo "dry_run=${DRY_RUN:-true}" >> "$GITHUB_OUTPUT"
+        env:
+          LOOKBACK: ${{ github.event.inputs.lookback_days }}
+          MAX_PRS: ${{ github.event.inputs.max_prs }}
+          REPO_OVERRIDE: ${{ github.event.inputs.repository }}
+          DRY_RUN: ${{ github.event.inputs.dry_run }}
+
+      - name: Run scanner
+        id: scan
+        run: |
+          python3 - <<'PY'
+          import os, sys, json, urllib.request, urllib.error, subprocess, datetime
+
+          lookback = int(os.environ.get("LOOKBACK_OVERRIDE") or "30")
+          max_prs = int(os.environ.get("MAX_PRS_OVERRIDE") or "20")
+          repo = os.environ.get("REPO_OVERRIDE") or os.environ["GITHUB_REPOSITORY"]
+          dry_run = (os.environ.get("DRY_RUN_OVERRIDE") or "true").lower() == "true"
+          review_url = os.environ.get("REVIEW_SURFACE_URL", "")
+          review_token = os.environ.get("REVIEW_SURFACE_TOKEN", "")
+
+          if not review_token:
+              print("No REVIEW_SURFACE_TOKEN; running scanner locally with gh CLI.")
+              # Local fallback: walk PRs via gh api
+              cutoff = (datetime.datetime.utcnow() - datetime.timedelta(days=lookback)).isoformat() + "Z"
+              list_payload = subprocess.check_output([
+                  "gh", "api",
+                  f"repos/{repo}/pulls?state=closed&per_page={max_prs}&sort=updated&direction=desc",
+              ])
+              prs = json.loads(list_payload)
+              prs = [p for p in prs if p["updated_at"] >= cutoff]
+              print(f"Found {len(prs)} PRs to scan.")
+
+              findings = []
+              for p in prs:
+                  number = p["number"]
+                  comments = json.loads(subprocess.check_output([
+                      "gh", "api", f"repos/{repo}/pulls/{number}/comments?per_page=50",
+                  ]))
+                  reviews = json.loads(subprocess.check_output([
+                      "gh", "api", f"repos/{repo}/pulls/{number}/reviews?per_page=50",
+                  ]))
+                  review_comments = [c for c in reviews if c.get("body")]
+                  combined = comments + review_comments
+                  ignored = [
+                      c for c in combined
+                      if c.get("body") and ("nit:" in c["body"].lower() or "style:" in c["body"].lower())
+                  ]
+                  if ignored:
+                      findings.append({
+                          "pr": number,
+                          "title": p["title"],
+                          "url": p["html_url"],
+                          "ignored_count": len(ignored),
+                      })
+              print(json.dumps({"findings": findings[:10], "scanned": len(prs), "dry_run": dry_run}, indent=2))
+          else:
+              endpoint = f"{review_url.rstrip('/')}/api/scan"
+              if "/" not in repo:
+                  print(f"SCAN_FAIL: malformed repo \"{repo}\" (expected owner/name)")
+                  sys.exit(1)
+              owner, name = repo.split("/", 1)
+              payload = {
+                  "owner": owner,
+                  "repo": name,
+                  "max_prs": max_prs,
+                  "dry_run": dry_run,
+              }
+              req = urllib.request.Request(
+                  endpoint,
+                  data=json.dumps(payload).encode(),
+                  headers={
+                      "Content-Type": "application/json",
+                      "Authorization": f"Bearer {review_token}",
+                  },
+                  method="POST",
+              )
+              try:
+                  with urllib.request.urlopen(req, timeout=120) as r:
+                      result = json.loads(r.read())
+                      print(json.dumps(result, indent=2))
+              except urllib.error.HTTPError as e:
+                  body = e.read().decode("utf-8", errors="replace")
+                  print(f"Scan HTTP error: {e.code} {e.reason}\n{body}", file=sys.stderr)
+                  sys.exit(1)
+              except urllib.error.URLError as e:
+                  print(f"Scan URL error: {e.reason}", file=sys.stderr)
+                  sys.exit(1)
+          PY
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          LOOKBACK_OVERRIDE: ${{ steps.params.outputs.lookback }}
+          MAX_PRS_OVERRIDE: ${{ steps.params.outputs.max_prs }}
+          REPO_OVERRIDE: ${{ steps.params.outputs.repo }}
+          DRY_RUN_OVERRIDE: ${{ steps.params.outputs.dry_run }}
+
+      - name: Summarize
+        if: always()
+        run: |
+          echo "## Retroactive sweep summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Repo: ${{ steps.params.outputs.repo }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Lookback: ${{ steps.params.outputs.lookback }} days" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Max PRs: ${{ steps.params.outputs.max_prs }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Dry run: ${{ steps.params.outputs.dry_run }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Output: ${{ steps.scan.outputs }}" >> "$GITHUB_STEP_SUMMARY"

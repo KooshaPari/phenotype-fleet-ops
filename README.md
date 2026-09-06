@@ -6,13 +6,13 @@
 
 ## What This Repo Provides
 
-| Component | Purpose | Consumed By |
-|-----------|---------|-------------|
-| **Reusable Workflows** | CI, security, release, attestation gates | All fleet repos via `uses: phenotype/phenotype-ops/.github/workflows/...` |
-| **phenotype-manifest** | Signed attestation CLI for pre-push + CI validation | All repos (installed via cargo) |
-| **Unified Review Surface** | Single webhook router for all code review tools | GitHub org webhook |
-| **Pillar Definitions** | 5 pillars × check definitions with skip logic | CI workflows, manifest generator |
-| **Governance Templates** | lefthook.yml, CLAUDE.base.md, AGENTS.base.md | New repo bootstrap |
+| Component                  | Purpose                                             | Consumed By                                                               |
+| -------------------------- | --------------------------------------------------- | ------------------------------------------------------------------------- |
+| **Reusable Workflows**     | CI, security, release, attestation gates            | All fleet repos via `uses: phenotype/phenotype-ops/.github/workflows/...` |
+| **phenotype-manifest**     | Signed attestation CLI for pre-push + CI validation | All repos (installed via cargo)                                           |
+| **Unified Review Surface** | Single webhook router for all code review tools     | GitHub org webhook                                                        |
+| **Pillar Definitions**     | 5 pillars × check definitions with skip logic       | CI workflows, manifest generator                                          |
+| **Governance Templates**   | lefthook.yml, CLAUDE.base.md, AGENTS.base.md        | New repo bootstrap                                                        |
 
 ## Quick Start
 
@@ -52,13 +52,13 @@ phenotype-manifest verify --manifest .manifest.signed.json
 
 ## Pillars (5)
 
-| Pillar | Checks | Skip When |
-|--------|--------|-----------|
-| **Quality** | fmt, clippy, test, nextest, docs | No Rust file changes |
-| **Security** | audit, deny, trufflehog, license | No Cargo.lock change + scanned <24h ago |
-| **Performance** | bench, size, profile | No perf-sensitive code touched |
-| **Compliance** | deny.toml, licenses, SPDX, SBOM | No dependency changes |
-| **Documentation** | spellcheck, links, api-docs | No doc/** or *.md changes |
+| Pillar            | Checks                           | Skip When                               |
+| ----------------- | -------------------------------- | --------------------------------------- |
+| **Quality**       | fmt, clippy, test, nextest, docs | No Rust file changes                    |
+| **Security**      | audit, deny, trufflehog, license | No Cargo.lock change + scanned <24h ago |
+| **Performance**   | bench, size, profile             | No perf-sensitive code touched          |
+| **Compliance**    | deny.toml, licenses, SPDX, SBOM  | No dependency changes                   |
+| **Documentation** | spellcheck, links, api-docs      | No doc/\*_ or _.md changes              |
 
 ## Manifest Format
 
@@ -83,13 +83,13 @@ phenotype-manifest verify --manifest .manifest.signed.json
 
 ## Migration From Old Repos
 
-| Old Repo | Status | Migrated To |
-|----------|--------|-------------|
-| `PhenoDevOps` | ✅ Deprecated | `phenotype-ops` |
-| `pheno-ci-templates` | ✅ Deprecated | `phenotype-ops/.github/workflows` |
-| `phenotype-tooling` | ✅ Deprecated | `phenotype-ops/tools` + `governance` |
-| `agent-devops-setups` | ✅ Deprecated | `phenotype-ops/agent-devops-setups` |
-| `PlatformKit` | ✅ Deprecated | `phenotype-ops/templates` + `policies` |
+| Old Repo              | Status        | Migrated To                            |
+| --------------------- | ------------- | -------------------------------------- |
+| `PhenoDevOps`         | ✅ Deprecated | `phenotype-ops`                        |
+| `pheno-ci-templates`  | ✅ Deprecated | `phenotype-ops/.github/workflows`      |
+| `phenotype-tooling`   | ✅ Deprecated | `phenotype-ops/tools` + `governance`   |
+| `agent-devops-setups` | ✅ Deprecated | `phenotype-ops/agent-devops-setups`    |
+| `PlatformKit`         | ✅ Deprecated | `phenotype-ops/templates` + `policies` |
 
 ## License
 

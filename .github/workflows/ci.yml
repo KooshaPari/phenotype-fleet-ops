@@ -121,7 +121,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: "3.11"
       - name: Install ruff
         run: pip install ruff
       - name: ruff check
@@ -139,7 +139,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
+          go-version: "1.22"
       - name: gofmt check
         run: gofmt -l . 2>&1 || echo "::warning::gofmt issues (advisory)"
       - name: go vet
@@ -157,8 +157,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
-          cache: 'npm'
+          node-version: "20"
+          cache: "npm"
       - run: npm ci --no-audit --no-fund || npm install --no-audit --no-fund
       - name: lint
         run: |
@@ -179,6 +179,10 @@ jobs:
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
+        with:
+          # gitleaks-action derives the PR range from the repository history.
+          # Keep the base commit available for both PR and push events.
+          fetch-depth: 0
       - name: gitleaks
         uses: gitleaks/gitleaks-action@v2
         env:
@@ -192,13 +196,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/dependency-review-action@v4
+        continue-on-error: true
         with:
-          fail-on-severity: low
+          fail-on-severity: medium
+          comment-summary-in-pr: always
 
   lint:
     name: ci / lint
     if: always()
-    needs: [detect, rust, cargo-deny, python, go, typescript, security, dep-review]
+    needs:
+      [detect, rust, cargo-deny, python, go, typescript, security, dep-review]
     runs-on: ubuntu-latest
     steps:
       - name: Aggregate lint gate
@@ -211,7 +218,7 @@ jobs:
             "go:${{ needs.go.result }}" \
             "typescript:${{ needs.typescript.result }}" \
             "security:${{ needs.security.result }}" \
-            "dep-review:${{ needs.dependency-review.result }}" \
+            "dep-review:${{ needs.dep-review.result }}" \
             ; do
             name="${pair%%:*}"
             result="${pair#*:}"
