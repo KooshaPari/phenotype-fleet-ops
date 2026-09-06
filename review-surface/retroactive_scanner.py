@@ -191,16 +191,16 @@ class PRCommentScanner:
         r.raise_for_status()
         items = r.json()
         if self.only_states:
-            items = [
-                p
-                for p in items
-                if (p.get("state") == "merged" and "merged" in self.only_states)
-                or (
-                    p.get("state") == "closed"
-                    and not p.get("merged_at")
-                    and "closed" in self.only_states
-                )
-            ]
+            # GitHub's pulls endpoint reports merged PRs with `state:"closed"`
+            # and a non-null `merged_at`; closed-without-merge has no
+            # `merged_at`. Detect merge status from `merged_at`, not `state`.
+            def _keep(p: dict[str, Any]) -> bool:
+                merged = bool(p.get("merged_at"))
+                if merged:
+                    return "merged" in self.only_states
+                return "closed" in self.only_states
+
+            items = [p for p in items if _keep(p)]
         return items
 
     async def list_review_comments(
@@ -277,10 +277,8 @@ class PRCommentScanner:
         author_l = author.lower()
 
         is_bot = author_l in BOT_LOGINS or author_l.endswith("[bot]")
-        if not is_bot and not self.include_bot_authors:
-            # Even when caller wants human-only, we still surface comments
-            # whose keywords are loud enough.
-            pass
+        if is_bot and not self.include_bot_authors:
+            return None
 
         severity, dismissed = classify(body)
         if dismissed:

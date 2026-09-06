@@ -36,20 +36,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 8
     steps:
-      - name: Build fanout payload
-        id: payload
-        env:
-          EVENT: ${{ toJson(github.event) }}
-        run: |
-          cat > /tmp/payload.json <<'EOF'
-          {"event": "pull_request",
-           "action": "${{ github.event.action }}",
-           "pull_request": ${{ toJson(github.event.pull_request) }},
-           "repository": ${{ toJson(github.event.repository) }}
-          }
-          EOF
-          echo "payload_file=/tmp/payload.json" >> "$GITHUB_OUTPUT"
-
       - name: Dispatch via smart queue
         id: dispatch
         env:
@@ -57,17 +43,24 @@ jobs:
           REVIEW_TOKEN: ${{ env.REVIEW_SURFACE_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number || github.event.inputs.pull_request_number }}
           REPO: ${{ github.repository }}
+          EVENT_ACTION: ${{ github.event.action }}
         run: |
           set -euo pipefail
-          python3 - "$REVIEW_URL" "$REVIEW_TOKEN" "$PR_NUMBER" "$REPO" <<'PY'
+          python3 - "$REVIEW_URL" "$REVIEW_TOKEN" "$PR_NUMBER" "$REPO" "$EVENT_ACTION" <<'PY'
           import os, sys, json, urllib.request, urllib.error
 
-          url, token, pr_number, repo = sys.argv[1:5]
+          url, token, pr_number, repo, action = sys.argv[1:6]
+          # `repo` is "owner/name"; the dispatch endpoint takes them split.
+          if "/" not in repo:
+              print(f"DISPATCH_FAIL: malformed repo \"{repo}\" (expected owner/name)")
+              sys.exit(1)
+          owner, name = repo.split("/", 1)
           endpoint = f"{url.rstrip('/')}/api/dispatch"
           payload = {
-              "provider_priority": ["coderabbit", "copilot", "cursor", "forge"],
-              "pr_key": f"{repo}#{pr_number}",
-              "action": "opened",
+              "owner": owner,
+              "repo": name,
+              "number": int(pr_number),
+              "action": action,
           }
           req = urllib.request.Request(
               endpoint,
@@ -81,7 +74,7 @@ jobs:
           try:
               with urllib.request.urlopen(req, timeout=30) as r:
                   body = json.loads(r.read())
-                  print(f"DISPATCH_OK: provider={body.get('chosen_provider')} reason={body.get('reason')}")
+                  print(f"DISPATCH_OK: backend={body.get('backend')} status={body.get('status')}")
                   sys.exit(0)
           except urllib.error.HTTPError as e:
               print(f"DISPATCH_HTTP_ERROR: {e.code} {e.reason}")

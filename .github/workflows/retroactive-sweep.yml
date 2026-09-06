@@ -114,9 +114,13 @@ jobs:
               print(json.dumps({"findings": findings[:10], "scanned": len(prs), "dry_run": dry_run}, indent=2))
           else:
               endpoint = f"{review_url.rstrip('/')}/api/scan"
+              if "/" not in repo:
+                  print(f"SCAN_FAIL: malformed repo \"{repo}\" (expected owner/name)")
+                  sys.exit(1)
+              owner, name = repo.split("/", 1)
               payload = {
-                  "repo": repo,
-                  "lookback_days": lookback,
+                  "owner": owner,
+                  "repo": name,
                   "max_prs": max_prs,
                   "dry_run": dry_run,
               }

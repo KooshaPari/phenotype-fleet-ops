@@ -48,6 +48,7 @@ logger = structlog.get_logger()
 class Settings(BaseSettings):
     github_webhook_secret: str = ""
     github_token: str = ""
+    api_token: str = ""
     redis_url: str = "redis://localhost:6379/0"
     tool_backends: list[str] = ["forge", "coderabbit", "copilot", "cursor"]
     default_backend: str = "forge"
@@ -156,6 +157,24 @@ async def verify_webhook_signature(request: Request, payload: bytes) -> bool:
         hashlib.sha256,
     ).hexdigest()
     return hmac.compare_digest(expected_sig, computed_sig)
+
+
+def authorize_api_request(request: Request) -> bool:
+    """Authorize internal REST endpoints (dispatch/scan).
+
+    Mirrors verify_webhook_signature's soft-fail posture: when no API token is
+    configured we allow the request (local/dev, unauthenticated), otherwise we
+    require a matching ``Authorization: Bearer <token>`` against `api_token`,
+    falling back to `github_token`.
+    """
+    expected = settings.api_token or settings.github_token
+    if not expected:
+        return True
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Bearer "):
+        return False
+    supplied = auth[len("Bearer "):]
+    return hmac.compare_digest(supplied.encode(), expected.encode())
 
 
 def _get_pr_key(owner: str, repo: str, number: int) -> str:
@@ -590,11 +609,13 @@ class DispatchRequest(BaseModel):
 
 
 @app.post("/api/dispatch")
-async def manual_dispatch(req: DispatchRequest):
+async def manual_dispatch(req: DispatchRequest, request: Request):
     """Manually trigger a review. Without `provider`, falls through the
     smart dispatcher's chain. With `force=True`, ignores cooldown and
     per-hour caps (e.g. for a manual re-run after a hotfix).
     """
+    if not authorize_api_request(request):
+        raise HTTPException(status_code=401, detail="Unauthorized")
     pr_key = _get_pr_key(req.owner, req.repo, req.number)
 
     if req.provider:
@@ -663,11 +684,13 @@ class ScanRequest(BaseModel):
 
 
 @app.post("/api/scan")
-async def retroactive_scan(req: ScanRequest):
+async def retroactive_scan(req: ScanRequest, request: Request):
     """Walk closed/merged PRs in `owner/repo` and surface review comments
     that were ignored. With `dry_run=True` (default), returns the report
     without touching GitHub issues.
     """
+    if not authorize_api_request(request):
+        raise HTTPException(status_code=401, detail="Unauthorized")
     token = settings.github_token
     if not token:
         raise HTTPException(status_code=503, detail="GITHUB_TOKEN not configured")
