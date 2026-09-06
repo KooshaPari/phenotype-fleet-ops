@@ -75,7 +75,7 @@ pre-push:
       run: |
         # Probe review-surface health before fanout is triggered by webhook.
         if [ -n "${REVIEW_SURFACE_URL:-}" ]; then
-          curl -fsS --max-time 5 "$REVIEW_SURFACE_URL/api/health/dispatch" >/dev/null || {
+          curl -fsS --max-time 5 "$REVIEW_SURFACE_URL/api/dispatch/status" >/dev/null || {
             echo "review-surface health probe failed: $REVIEW_SURFACE_URL"
             exit 1
           }

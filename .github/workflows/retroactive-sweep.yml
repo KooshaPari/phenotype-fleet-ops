@@ -1,37 +1,67 @@
 name: Retroactive Review Sweep
 
-# Walks PR review comments for the last N closed PRs and triages findings that
-# were raised but never addressed. Runs weekly + on-demand. Findings that
-# weren't fixed are opened as issues with the originating review snippet.
-
 on:
+  pull_request_review:
+    types: [submitted, edited, dismissed]
+  issue_comment:
+    types: [created, edited]
   schedule:
-    # Every Monday at 09:00 UTC (after the weekend PR bag settles).
-    - cron: "0 9 * * 1"
+    # Weekly on Sunday 03:00 UTC
+    - cron: "0 3 * * 0"
   workflow_dispatch:
     inputs:
-      lookback_days:
-        description: "How many days back to scan"
+      since_days:
+        description: "Lookback window in days (default 7)"
         required: false
-        default: "30"
-        type: string
+        type: number
+        default: 7
       max_prs:
-        description: "Max PRs to scan"
+        description: "Max PRs to scan per repo (default 50)"
         required: false
-        default: "20"
-        type: string
-      repository:
-        description: "owner/repo override (defaults to current)"
+        type: number
+        default: 50
+      include_bot_authors:
+        description: "Include comments authored by bots"
         required: false
-        default: ""
-        type: string
+        type: boolean
+        default: false
       dry_run:
-        description: "Don't create issues, just report"
+        description: "Dry-run only (no issues/draft PRs created)"
         required: false
-        default: "true"
-        type: choice
-        options: ["true", "false"]
-
+        type: boolean
+        default: false
+      repos:
+        description: "JSON list of owner/repo pairs (default: ${{ github.repository }})"
+        required: false
+        type: string
+        default: ""
+  workflow_call:
+    inputs:
+      since_days:
+        description: "Lookback window in days"
+        required: false
+        type: number
+        default: 7
+      max_prs:
+        description: "Max PRs to scan per repo"
+        required: false
+        type: number
+        default: 50
+      include_bot_authors:
+        description: "Include comments authored by bots"
+        required: false
+        type: boolean
+        default: false
+      dry_run:
+        description: "Dry-run only (no issues/draft PRs created)"
+        required: false
+        type: boolean
+        default: false
+      repos:
+        description: "JSON list of owner/repo pairs (default: caller)"
+        required: false
+        type: string
+        default: ""
 permissions:
   contents: read
   pull-requests: read
@@ -138,8 +168,12 @@ jobs:
                       result = json.loads(r.read())
                       print(json.dumps(result, indent=2))
               except urllib.error.HTTPError as e:
-                  print(f"Scan HTTP error: {e.code} {e.reason}")
-                  sys.exit(0)  # non-fatal
+                  body = e.read().decode("utf-8", errors="replace")
+                  print(f"Scan HTTP error: {e.code} {e.reason}\n{body}", file=sys.stderr)
+                  sys.exit(1)
+              except urllib.error.URLError as e:
+                  print(f"Scan URL error: {e.reason}", file=sys.stderr)
+                  sys.exit(1)
           PY
         env:
           GITHUB_REPOSITORY: ${{ github.repository }}
