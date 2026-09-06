@@ -26,7 +26,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  REVIEW_SURFACE_URL: ${{ vars.REVIEW_SURFACE_URL || 'https://review.phenotype.internal' }}
+  REVIEW_SURFACE_URL: ${{ vars.REVIEW_SURFACE_URL || '' }}
   REVIEW_SURFACE_TOKEN: ${{ secrets.REVIEW_SURFACE_TOKEN }}
   GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -46,6 +46,10 @@ jobs:
           EVENT_ACTION: ${{ github.event.action }}
         run: |
           set -euo pipefail
+          if [ -z "$REVIEW_URL" ]; then
+            echo "DISPATCH_SKIP: REVIEW_SURFACE_URL not configured; no review-surface endpoint to call."
+            exit 0
+          fi
           python3 - "$REVIEW_URL" "$REVIEW_TOKEN" "$PR_NUMBER" "$REPO" "$EVENT_ACTION" <<'PY'
           import os, sys, json, urllib.request, urllib.error
 
