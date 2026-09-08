@@ -12,22 +12,18 @@ import json
 import hashlib
 import hmac
 import asyncio
-import logging
-from typing import Optional
 from datetime import datetime, timezone
 from contextlib import asynccontextmanager
 
 import httpx
-import yaml
+import structlog
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 from pydantic import BaseModel
 from pydantic_settings import BaseSettings
-import structlog
 
 # Providers, rate-limit-aware fallback, and retroactive scanner live in
-# sibling modules so this file stays the orchestration surface only.
 from smart_dispatcher import (
     SmartDispatcher,
     RateLimitTracker,
@@ -38,6 +34,7 @@ from retroactive_scanner import (
     PRCommentScanner,
     upsert_tracking_issue,
 )
+from config_loader import apply_to_dispatcher_caps, apply_to_settings, load_config
 
 logger = structlog.get_logger()
 
@@ -47,9 +44,13 @@ logger = structlog.get_logger()
 
 class Settings(BaseSettings):
     github_webhook_secret: str = ""
-    github_token: str = ""
     api_token: str = ""
-    redis_url: str = "redis://localhost:6379/0"
+    github_token: str = ""
+    # Provider-specific tokens (env: CODERABBIT_TOKEN, COPILOT_TOKEN, CURSOR_TOKEN, FORGE_TOKEN)
+    coderabbit_token: str = ""
+    copilot_token: str = ""
+    cursor_token: str = ""
+    forge_token: str = ""
     tool_backends: list[str] = ["forge", "coderabbit", "copilot", "cursor"]
     default_backend: str = "forge"
     rate_limit_per_hour: int = 30
@@ -60,32 +61,26 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+
+# Apply config.yaml overrides (env vars win):
+#   - Settings.tool_backends (priority order of providers)
+#   - per-provider rate limits in PROVIDER_CAPS
+#   - Settings.rate_limit_per_hour (legacy single-bucket)
+_cfg = load_config("config.yaml")
+apply_to_settings(settings, _cfg)
+apply_to_dispatcher_caps(PROVIDER_CAPS, _cfg)
+logger.info(
+    "config_loaded",
+    tool_backends=settings.tool_backends,
+    provider_caps={k: v["per_hour"] for k, v in PROVIDER_CAPS.items()},
+    rate_limit_per_hour=settings.rate_limit_per_hour,
+)
 structlog.configure(
     wrapper_class=structlog.make_filtering_bound_logger(
         getattr(logging, settings.log_level.upper(), logging.INFO)
     ),
 )
-
-
-# ── Config YAML loader ──────────────────────────────────────────────────────────
-
-
-def load_config(path: str = "config.yaml") -> dict:
-    """Load runtime config from a YAML file.
-
-    Returns the parsed dict on success, or an empty dict if the file is missing
-    or unreadable. Missing-file is a soft-fail (returns {}) so the service can
-    still boot from environment variables alone.
-    """
-    try:
-        with open(path, "r") as f:
-            data = yaml.safe_load(f)
-            return data if isinstance(data, dict) else {}
-    except FileNotFoundError:
-        return {}
-    except Exception as e:
-        logger.warning("config_load_failed", path=path, error=str(e))
-        return {}
 
 
 # ── State ────────────────────────────────────────────────────────────────────────
@@ -405,9 +400,13 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="Phenotype Unified Review Surface",
-    version="0.1.0",
-    lifespan=lifespan,
+    title="Review Surface",
+    version="1.0.0",
+    description=(
+        "Proactive + retroactive code-review fan-out: webhook ingress from "
+        "GitHub PRs, smart provider dispatcher (CodeRabbit → Copilot → Cursor "
+        "→ Forge), and weekly sweep that opens issues for ignored findings."
+    ),
 )
 
 

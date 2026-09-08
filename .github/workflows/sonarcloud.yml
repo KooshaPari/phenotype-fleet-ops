@@ -1,0 +1,59 @@
+name: sonarcloud
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: read
+  security-events: write
+
+jobs:
+  analyze:
+    name: SonarCloud Analysis
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    continue-on-error: true
+
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: setup python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: setup node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: lint python (ruff)
+        run: |
+          python3 -m pip install --quiet ruff
+          ruff check review-surface/ tools/ || true
+
+      - name: lint js/yaml (prettier)
+        run: |
+          npx --yes prettier --check .github/workflows/*.yml lefthook.yml || true
+
+      # SonarCloud scan. Wired via SONAR_TOKEN repo secret. Continues on
+      # error so the gate failure mode is "warn" not "block".
+      - name: sonarcloud scan
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ -z "$SONAR_TOKEN" ]; then
+            echo "::notice::SONAR_TOKEN not configured; skipping sonarcloud scan"
+            exit 0
+          fi
+          npx --yes sonar-scanner-cli@1.0.7 || true
+        continue-on-error: true
