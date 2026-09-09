@@ -14,6 +14,7 @@ import hashlib
 import hmac
 import asyncio
 from datetime import datetime, timezone
+from typing import Optional
 from contextlib import asynccontextmanager
 
 import httpx
