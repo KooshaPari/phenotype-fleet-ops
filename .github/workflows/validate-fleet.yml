@@ -1,11 +1,14 @@
 name: validate-fleet
 
-# Runs `tools/review-surface-boot/validate-fleet.sh` to confirm all 11
-# fleet repos stay at byte-for-byte parity with fleet-ops master and have
-# the expected workflows + lefthook state.
+# validate-fleet.sh is an operator-local tool — it depends on the
+# machine having all 11 sibling fleet repos cloned at the expected
+# branches. The CI runner has only this repo, so the script's preflight
+# (`REPOS_ROOT/$MASTER must be a directory`) will always fail there.
 #
-# Schedule: weekly Mon 09:00 UTC (operators can also run ad-hoc via
-# `gh workflow run validate-fleet.yml`).
+# Triggers: schedule (weekly) and manual workflow_dispatch. The push
+# trigger that previously ran the script on every PR touching any of
+# the propagated files was removed because it could never succeed in
+# CI and only produced noisy red Xs on otherwise valid PRs.
 
 on:
   schedule:
@@ -16,21 +19,6 @@ on:
         description: "Verbose output"
         type: boolean
         default: false
-  push:
-    paths:
-      - "tools/review-surface-boot/validate-fleet.sh"
-      - ".github/workflows/review-fanout.yml"
-      - ".github/workflows/retroactive-sweep.yml"
-      - ".github/workflows/auto-merge.yml"
-      - ".github/workflows/sonarcloud.yml"
-      - ".github/auto-merge.yml"
-      - "lefthook.yml"
-      - "sonar-project.properties"
-      - "review-surface/config_loader.py"
-      - "review-surface/smart_dispatcher.py"
-      - "review-surface/retroactive_scanner.py"
-      - "review-surface/main.py"
-      - ".github/workflows/validate-fleet.yml"
 
 jobs:
   validate:
