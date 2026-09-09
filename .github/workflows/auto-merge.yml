@@ -30,9 +30,9 @@ jobs:
         uses: actions/checkout@v4
 
       # Maintenance: when merging the chore PR series, switch back to
-# `gh-actions/auto-merge` if/when that action becomes available; the
-# peter-evans action is functionally equivalent and is what unblocks
-# this PR.
+      # `gh-actions/auto-merge` if/when that action becomes available; the
+      # peter-evans action is functionally equivalent and is what unblocks
+      # this PR.
       - name: enable auto-merge
         uses: peter-evans/enable-pull-request-automerge@v3
         with:
