@@ -26,9 +26,14 @@ jobs:
       startsWith(github.event.pull_request.title, 'chore(review-surface)') ||
       startsWith(github.event.pull_request.title, 'fix(review-surface)')
     steps:
+      - name: checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
       - name: enable auto-merge
         uses: peter-evans/enable-pull-request-automerge@v3
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          pull-request: ${{ github.event.pull_request.number }}
+          pull-request-number: ${{ github.event.pull_request.number }}
           merge-method: squash
