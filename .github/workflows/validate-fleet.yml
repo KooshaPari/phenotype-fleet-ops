@@ -1,0 +1,81 @@
+name: validate-fleet
+
+# Runs `tools/review-surface-boot/validate-fleet.sh` to confirm all 11
+# fleet repos stay at byte-for-byte parity with fleet-ops master and have
+# the expected workflows + lefthook state.
+#
+# Schedule: weekly Mon 09:00 UTC (operators can also run ad-hoc via
+# `gh workflow run validate-fleet.yml`).
+
+on:
+  schedule:
+    - cron: "0 9 * * 1"
+  workflow_dispatch:
+    inputs:
+      verbose:
+        description: "Verbose output"
+        type: boolean
+        default: false
+  push:
+    paths:
+      - "tools/review-surface-boot/validate-fleet.sh"
+      - ".github/workflows/review-fanout.yml"
+      - ".github/workflows/retroactive-sweep.yml"
+      - ".github/workflows/auto-merge.yml"
+      - ".github/workflows/sonarcloud.yml"
+      - ".github/auto-merge.yml"
+      - "lefthook.yml"
+      - "sonar-project.properties"
+      - "review-surface/config_loader.py"
+      - "review-surface/smart_dispatcher.py"
+      - "review-surface/retroactive_scanner.py"
+      - "review-surface/main.py"
+      - ".github/workflows/validate-fleet.yml"
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout fleet-ops
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Setup Python (for validate-fleet.sh if it ever needs it)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Make validate-fleet.sh executable
+        run: chmod +x tools/review-surface-boot/validate-fleet.sh
+
+      - name: Run validate-fleet.sh
+        id: run_validate
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          bash tools/review-surface-boot/validate-fleet.sh ${{ inputs.verbose == true && '--verbose' || '' }}
+
+      - name: Fail loudly on drift
+        if: steps.run_validate.outcome != 'success'
+        run: |
+          echo "::error::validate-fleet.sh reported failures — fleet has drifted from fleet-ops master"
+          echo "Run \`bash tools/review-surface-boot/validate-fleet.sh\` locally and re-propagate the listed files."
+          exit 1
+
+  # Aggregate status check: success only if validate passed AND no parse errors.
+  # Used by branch protection as required status check.
+  aggregate:
+    needs: validate
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Fail if validate job failed
+        if: needs.validate.result != 'success'
+        run: |
+          echo "validate-fleet job status: ${{ needs.validate.result }}"
+          exit 1
+      - name: Mark OK
+        if: needs.validate.result == 'success'
+        run: echo "validate-fleet aggregate status check passed"
