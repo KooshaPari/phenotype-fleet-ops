@@ -1,25 +1,17 @@
-# phenotype-ops CODEOWNERS (ADR-018, ADR-021, ADR-023)
-# Default: KooshaPari owns all paths
-*       @KooshaPari
+# CODEOWNERS — every line in this file assigns review responsibility.
+# https://docs.github.com/en/repositories/creating-and-managing-repositories/about-code-owners
 
-# Manifest CLI
-/tools/phenotype-manifest/   @KooshaPari
+# Default owners for everything not otherwise specified
+*                          @KooshaPari
 
-# Review surface
-/review-surface/             @KooshaPari
+# Reviewer escalation: review-surface is the review orchestration layer
+/review-surface/            @KooshaPari
 
-# Reusable CI workflows
-/.github/workflows/          @KooshaPari
+# CI / Workflow changes need both review-surface + tooling eyes
+/.github/                   @KooshaPari
+/tools/                     @KooshaPari
+/validate-fleet.sh          @KooshaPari
 
-# Governance templates
-/governance/                 @KooshaPari
-
-# Policies / schemas
-/policies/                   @KooshaPari
-/templates/                  @KooshaPari
-
-# Pillar definitions
-/pillars/                    @KooshaPari
-
-# Agent DevOps Setups
-/agent-devops-setups/        @KooshaPari
+# Documentation
+/docs/                      @KooshaPari
+/*.md                       @KooshaPari
