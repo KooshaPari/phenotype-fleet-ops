@@ -1,5 +1,21 @@
+# schema: https://docs.mergify.com/mergify-configuration-schema.json
+---
 # Mergify Configuration — Optimized for multi-language monorepos
 # Docs: https://docs.mergify.com/
+#
+# NOTE: check-success contexts reference REAL GitHub Actions contexts
+# emitted by .github/workflows/ci.yml. As of HEAD 7f00cb3 those contexts are:
+#   - ci/lint
+#   - ci/test
+#   - Lint & Format (workflow: lint-format.yml)
+#   - Python (workflow: ci.yml job name)
+#   - SonarCloud Code Analysis (workflow: sonarcloud.yml; only succeeds
+#     after the SonarCloud project is registered in the kooshapari org)
+#   - Mergify Merge Queue (managed by mergify itself)
+#   - Summary (managed by mergify itself)
+#
+# Fictional contexts ("ci", "lint", "typecheck", "test" from the prior config)
+# were removed because no workflow emits them.
 
 pull_request_rules:
   # Auto-merge when all CI checks pass and PR is approved
@@ -7,10 +23,9 @@ pull_request_rules:
     conditions:
       - "#review-requested=0"
       - "#approved-reviews-by>=1"
-      - check-success=ci
-      - check-success=lint
-      - check-success=typecheck
-      - check-success=test
+      - check-success=ci/lint
+      - check-success=ci/test
+      - check-success=Lint & Format
       - -conflict
       - -closed
     actions:
@@ -18,7 +33,7 @@ pull_request_rules:
         method: squash
         commit_message_template: |
           {{ title }} (#{{ number }})
-          
+
           Co-authored-by: {{ author }}
       post_merge:
         action: close
@@ -27,7 +42,8 @@ pull_request_rules:
   - name: Auto-merge dependency updates
     conditions:
       - author=dependabot[bot] | renovate[bot]
-      - check-success=ci
+      - check-success=ci/lint
+      - check-success=ci/test
       - -conflict
       - -closed
     actions:
@@ -35,7 +51,7 @@ pull_request_rules:
         method: squash
         commit_message_template: |
           {{ title }} (#{{ number }})
-          
+
           Co-authored-by: {{ author }}
       post_merge:
         action: close
@@ -44,8 +60,8 @@ pull_request_rules:
   - name: Auto-merge bot housekeeping PRs
     conditions:
       - author=trunk-io[bot] | mergify[bot] | github-actions[bot]
-      - check-success=ci
-      - check-success=lint
+      - check-success=ci/lint
+      - check-success=Lint & Format
       - -conflict
       - -closed
     actions:
@@ -128,9 +144,9 @@ pull_request_rules:
     conditions:
       - -closed
       - -draft
-      - check-success=ci
-      - check-success=lint
-      - check-success=test
+      - check-success=ci/lint
+      - check-success=ci/test
+      - check-success=Lint & Format
       - "#approved-reviews-by>=1"
     actions:
       label:
