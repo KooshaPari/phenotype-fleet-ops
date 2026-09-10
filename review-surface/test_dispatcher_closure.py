@@ -239,8 +239,14 @@ def test_source_license_review_repo_files_present():
 
 
 def test_source_license_review_python_files_have_header():
-    """Every committed .py file should declare SPDX or copyright/license header."""
-    py_files = list((REPO_ROOT / "review-surface").rglob("*.py"))
+    """Every project-owned .py file should declare SPDX or copyright/license header."""
+    # Skip virtualenv and site-packages (third-party packages with their own
+    # SPDX/copyright headers that don't match our project's regex pattern).
+    py_files = [
+        p for p in (REPO_ROOT / "review-surface").rglob("*.py")
+        if ".venv-test" not in str(p) and ".venv" not in str(p)
+        and "__pycache__" not in str(p) and "site-packages" not in str(p)
+    ]
     bad = []
     header_re = re.compile(r"(?im)(spdx-license-identifier|copyright|\(c\)|licensed under)")
     for path in py_files:
@@ -251,7 +257,7 @@ def test_source_license_review_python_files_have_header():
         if not header_re.search(content[:2000]):
             bad.append(str(path.relative_to(REPO_ROOT)))
     assert not bad, (
-        f"Python files missing SPDX/copyright/license header (first 2KB): {bad}"
+        f"Project-owned Python files missing SPDX/copyright/license header (first 2KB): {bad}"
     )
     print("PASS test_source_license_review_python_files_have_header")
 
@@ -277,6 +283,9 @@ def test_source_license_review_no_obvious_secrets():
     secret_re = re.compile(r"(?i)(api[_-]?key|secret|password|token)\s*[=:]\s*['\"][a-z0-9]{20,}")
     bad: list = []
     for path in (REPO_ROOT / "review-surface").rglob("*.py"):
+        # Skip virtualenv (third-party packages)
+        if ".venv-test" in str(path) or ".venv" in str(path):
+            continue
         try:
             content = path.read_text(encoding="utf-8", errors="ignore")
         except Exception:
