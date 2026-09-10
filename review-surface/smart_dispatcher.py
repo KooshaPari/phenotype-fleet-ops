@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 KooshaPari
 """smart_dispatcher — Rate-limit-aware provider fallback chain.
 
 Each review provider (CodeRabbit, Copilot, Cursor, Forge) has a different rate

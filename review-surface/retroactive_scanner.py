@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 KooshaPari
 """retroactive_scanner — walk merged/closed PR comments and surface findings
 that were ignored.
 

@@ -67,3 +67,9 @@ docker-run:  ## Run review-surface container.
 		-e REVIEW_GITHUB_TOKEN \
 		-e REVIEW_SURFACE_TOKEN \
 		phenotype/review-surface:dev
+
+test-closure:
+	./review-surface/.venv-test/bin/python -u review-surface/test_dispatcher_closure.py
+
+test-all: test test-closure
+	@echo "ALL FLEET-OPS TESTS PASS"

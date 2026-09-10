@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 KooshaPari
 """Integration tests for the smart provider dispatcher.
 
 Verifies the actual public API of `review-surface/smart_dispatcher.py`:

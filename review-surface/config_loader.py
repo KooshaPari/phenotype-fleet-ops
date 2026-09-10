@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 KooshaPari
 """config_loader — wire `config.yaml` into runtime Settings + PROVIDER_CAPS.
 
 Why a dedicated module:
