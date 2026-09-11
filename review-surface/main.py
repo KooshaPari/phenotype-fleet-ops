@@ -23,7 +23,6 @@ import httpx
 import structlog
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse
-from fastapi.testclient import TestClient
 from pydantic import BaseModel
 from pydantic_settings import BaseSettings
 
@@ -172,7 +171,7 @@ def authorize_api_request(request: Request) -> bool:
     auth = request.headers.get("Authorization", "")
     if not auth.startswith("Bearer "):
         return False
-    supplied = auth[len("Bearer "):]
+    supplied = auth[len("Bearer ") :]
     return hmac.compare_digest(supplied.encode(), expected.encode())
 
 
@@ -748,6 +747,8 @@ def run_tests() -> dict:
     # lock bound to the wrong loop (subsequent TestClient calls hang).
     _pr_store.clear()
     _rate_limiter.clear()
+
+    from fastapi.testclient import TestClient
 
     client = TestClient(app)
     results: list[dict] = []
