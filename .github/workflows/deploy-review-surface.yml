@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
     paths:
-      - 'review-surface/**'
+      - "review-surface/**"
   workflow_dispatch:
 
 jobs:
