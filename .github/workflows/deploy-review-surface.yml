@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
     paths:
-      - 'review-surface/**'
+      - "review-surface/**"
   workflow_dispatch:
 
 jobs:
@@ -47,3 +47,13 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # Runtime secrets are injected via Infisical, NOT baked into the image.
+      # When deploying this container, set these env vars in your orchestrator:
+      #   INFISICAL_TOKEN      — Infisical machine identity service token
+      #   INFISICAL_PROJECT_ID — Infisical project ID (default: 8efe392e-...)
+      #   INFISICAL_ENV        — prod | staging | dev (default: prod)
+      #
+      # The container ENTRYPOINT runs `infisical run ...` to pull secrets into
+      # the process environment before starting uvicorn. If Infisical vars are
+      # absent, it falls back to whatever env vars are already set (local dev).
