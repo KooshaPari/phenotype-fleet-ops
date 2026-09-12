@@ -1,8 +1,8 @@
 FROM python:3.12-slim AS base
 
-# Install Infisical CLI for runtime secret injection
+# Infisical CLI installation via official setup script (https://docs.infisical.com/cli/installation)
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends curl gnupg && \
+    apt-get install -y --no-install-recommends curl gnupg ca-certificates && \
     curl -1sLf 'https://dl.cloudsmith.io/public/infisical/infisical-cli/setup.deb.sh' | bash - && \
     apt-get install -y infisical && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
@@ -27,7 +27,7 @@ ENTRYPOINT ["/bin/sh", "-c", "\
       --projectId \"${INFISICAL_PROJECT_ID}\" \
       --env \"${INFISICAL_ENV:-prod}\" \
       --token \"${INFISICAL_TOKEN}\" \
-      --bash -c 'exec uvicorn main:app --host 0.0.0.0 --port ${REVIEW_PORT:-8080} --log-level ${REVIEW_LOG_LEVEL:-info}'; \
+      -- bash -c 'exec uvicorn main:app --host 0.0.0.0 --port ${REVIEW_PORT:-8080} --log-level ${REVIEW_LOG_LEVEL:-info}'; \
   else \
     echo '[review-surface] No Infisical creds; starting with local env vars.' && \
     exec uvicorn main:app --host 0.0.0.0 --port ${REVIEW_PORT:-8080} --log-level ${REVIEW_LOG_LEVEL:-info}; \

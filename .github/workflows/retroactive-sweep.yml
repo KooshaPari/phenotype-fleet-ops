@@ -84,10 +84,10 @@ jobs:
       - name: Resolve scan parameters
         id: params
         run: |
-          echo "lookback=${{ github.event.inputs.since_days || '30' }}" >> "$GITHUB_OUTPUT"
-          echo "max_prs=${{ github.event.inputs.max_prs || '50' }}" >> "$GITHUB_OUTPUT"
-          echo "repo=${{ github.event.inputs.repos || github.repository }}" >> "$GITHUB_OUTPUT"
-          echo "dry_run=${{ github.event.inputs.dry_run || 'true' }}" >> "$GITHUB_OUTPUT"
+          printf 'lookback=%s\n' "${LOOKBACK:-30}" >> "$GITHUB_OUTPUT"
+          printf 'max_prs=%s\n' "${MAX_PRS:-50}" >> "$GITHUB_OUTPUT"
+          printf 'repo=%s\n' "${REPO_OVERRIDE:-${GITHUB_REPOSITORY}}" >> "$GITHUB_OUTPUT"
+          printf 'dry_run=%s\n' "${DRY_RUN:-true}" >> "$GITHUB_OUTPUT"
         env:
           LOOKBACK: ${{ github.event.inputs.since_days }}
           MAX_PRS: ${{ github.event.inputs.max_prs }}
